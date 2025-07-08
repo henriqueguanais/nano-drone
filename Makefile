@@ -11,7 +11,7 @@ PROGRAMMER = arduino
 BUILD_DIR = build
 
 # se nao for usar o tests, remova tests do SRC_DIRS
-SRC_DIRS = src tests
+SRC_DIRS = src lib/freertos/src
 
 # Arquivos fonte de múltiplos diretórios
 SRC = $(foreach dir, $(SRC_DIRS), $(wildcard $(dir)/*.c))
@@ -19,7 +19,7 @@ OBJ = $(patsubst %.c, $(BUILD_DIR)/%.o, $(SRC))
 
 # Compilador e flags
 CC = avr-gcc
-CFLAGS = -mmcu=$(MCU) -Wall -Os -DF_CPU=$(F_CPU) -Iinclude
+CFLAGS = -mmcu=$(MCU) -Wall -Os -DF_CPU=$(F_CPU) -Iinclude -Ilib/freertos/include
 LDFLAGS = -mmcu=$(MCU)
 
 .PHONY: all flash clean
