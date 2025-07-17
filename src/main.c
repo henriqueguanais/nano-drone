@@ -15,6 +15,9 @@
 
 void setup(void);
 static void vtask_rc(void *pvParameters);
+static void vtask_mpu6050(void *pvParameters);
+uint16_t map_rc_to_pwm(uint16_t rc_value);
+uint32_t get_timer0_microseconds(void);
 
 const int16_t atan_lookup[51] = {
 	0,    57,   114,  171,  228,  284,  340,  395,  449,  503,  // 0.0-0.9
@@ -45,8 +48,6 @@ int16_t fast_atan2_degrees(int16_t y, int16_t z) {
 	return angle; // Retorna em décimos de grau
 }
 
-static void vtask_mpu6050(void *pvParameters);
-
 QueueHandle_t xQueueRC;
 
 // Variável para criar timer virtual de 16 bits com Timer0 de 8 bits
@@ -76,8 +77,8 @@ void setup()
 	// Configura Timer1 para Fast PWM (TOP = ICR1), 50 Hz
 	TCCR1A = (1 << COM1A1) | (1 << WGM11); // Fast PWM, modo 14
 	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS12); // Prescaler 256
-	ICR1 = 1249; // 50 Hz (20 ms): (16MHz / (256 * 50Hz)) - 1 = 1249
-	OCR1A = 62;  // Duty cycle inicial (~5%): 1249 * 0.05 = 62
+	ICR1 = 1249; // 50 Hz 
+	OCR1A = 55;  // 900 us
 	TIMSK1 = 0x00; // Desabilita interrupções do Timer1
 	
 	// Configura Timer0 para contagem de tempo (PPM timing)
@@ -131,8 +132,8 @@ static void vtask_mpu6050(void *pvParameters)
 		sample_count++;
 
 		// Calcula ângulos usando tabela de lookup (sem math.h)
-		int16_t roll_tenths = fast_atan2_degrees(mpu_data.accel_y, mpu_data.accel_z);
-		int16_t pitch_tenths = fast_atan2_degrees(-mpu_data.accel_x, mpu_data.accel_z);
+		// int16_t roll_tenths = fast_atan2_degrees(mpu_data.accel_y, mpu_data.accel_z);
+		// int16_t pitch_tenths = fast_atan2_degrees(-mpu_data.accel_x, mpu_data.accel_z);
 
 		// Envia dados do MPU6050 pela USART (apenas aceleração e ângulos)
 		// USART_send_string("[MPU6050] ");
@@ -159,22 +160,27 @@ static void vtask_rc(void *pvParameters)
 
 		if (xStatus == pdPASS)
 		{
-			// USART_send_string("CH1: ");
-			// USART_send_int(rc_local_values[0]);
-			// USART_send_string(" | CH2: ");
-			// USART_send_int(rc_local_values[1]);
+			// Aplica o valor do canal 3 (throttle) ao PWM
+			uint16_t throttle_value = rc_local_values[2];
+			if (throttle_value >= 1000 && throttle_value <= 2000) {
+				OCR1A = map_rc_to_pwm(throttle_value);
+			}
+			
+			// Exibe todos os canais via USART
+			USART_send_string("CH1: ");
+			USART_send_int(rc_local_values[0]);
+			USART_send_string(" | CH2: ");
+			USART_send_int(rc_local_values[1]);
 			USART_send_string(" | CH3: ");
 			USART_send_int(rc_local_values[2]);
-			// USART_send_string(" | CH4: ");
-			// USART_send_int(rc_local_values[3]);
-			// USART_send_string(" | CH5: ");
-			// USART_send_int(rc_local_values[4]);
-			// USART_send_string(" | CH6: ");
-			// USART_send_int(rc_local_values[5]);
+			USART_send_string(" | CH4: ");
+			USART_send_int(rc_local_values[3]);
+			USART_send_string(" | PWM: ");
+			USART_send_int(OCR1A);
 			USART_send_string("\r\n");
 		}
 
-		vTaskDelay(pdMS_TO_TICKS(100));
+		vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms para resposta mais rápida
 	}
 }
 
@@ -201,6 +207,21 @@ uint32_t get_timer0_microseconds(void)
 	
 	// Converte para microssegundos (divide por 2, pois cada tick = 0.5 us)
 	return total_ticks >> 1;
+}
+
+// Função para mapear valores RC (1000-2000us) para valores PWM (OCR1A)
+uint16_t map_rc_to_pwm(uint16_t rc_value) {
+	// Limita os valores de entrada
+	if (rc_value < 1000) rc_value = 1000;
+	if (rc_value > 2000) rc_value = 2000;
+	
+	// Mapeia 1000-2000us para aproximadamente 62-187 (5%-15% duty cycle)
+	// ICR1 = 1249, então:
+	// 5% = 62, 10% = 125, 15% = 187
+	// Fórmula: OCR1A = (rc_value - 1000) * (187 - 62) / (2000 - 1000) + 62
+	uint16_t pwm_value = ((uint32_t)(rc_value - 1000) * 125) / 1000 + 52;
+	
+	return pwm_value;
 }
 
 // Interrupção externa INT0 para capturar o sinal PPM do receptor RC no PD2
@@ -230,6 +251,11 @@ ISR(INT0_vect)
 		// Filtra apenas pulsos válidos (entre 0.5ms e 2.5ms)
 		rc_values[current_channel] = (uint16_t)pulse_width;
 		current_channel++;
+	}
+	
+	// Chama o scheduler do FreeRTOS se necessário
+	if (xHigherPriorityTaskWoken == pdTRUE) {
+		taskYIELD();
 	}
 }
 
