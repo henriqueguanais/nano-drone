@@ -145,6 +145,11 @@ void setup()
 
 	USART_init(MYUBRR);
 	mpu6050_init();
+	
+	// TESTE: Força PWM intermediário nos motores 1 e 2 (PB1/PB2)
+	OCR1A = 93;  // 1500μs (1.5ms) - Sinal central
+	OCR1B = 93;  // 1500μs (1.5ms) - Sinal central
+	USART_send_string("Teste PWM: OCR1A=93, OCR1B=93\r\n");
 }
 
 // Inicializa os controladores PID com valores conservadores
@@ -342,26 +347,16 @@ uint32_t get_timer0_microseconds(void)
 	return total_ticks >> 1;
 }
 
-// Função para mapear valores RC (1000-2000us) para valores PWM (OCR1A)
+// Função para mapear valores RC (850-2000us) para valores PWM (OCR1A)
 uint16_t map_rc_to_pwm(uint16_t rc_value) {
 	// Limita os valores de entrada
-	if (rc_value < 1000) rc_value = 1000;
+	if (rc_value < 850) rc_value = 850;
 	if (rc_value > 2000) rc_value = 2000;
-	
-	// Mapeia 1000-2000μs para valores OCR apropriados no Timer1 (50Hz)
-	// ICR1 = 1249, período = 20ms
-	// 1000μs → 1ms = 5% duty cycle = 62 (1000/20000 * 1250 = 62.5)
-	// 2000μs → 2ms = 10% duty cycle = 125 (2000/20000 * 1250 = 125)
-	uint16_t pwm_value = ((uint32_t)(rc_value - 1000) * 62) / 1000 + 62;
-
-	// Garante limites seguros (1-2ms para ESCs)
-	if (pwm_value > 125) {
-		pwm_value = 125;
-	}
-	if (pwm_value < 62) {
-		pwm_value = 62;
-	}
-	
+	// Mapeia 850-2000μs para valores OCR apropriados no Timer1 (50Hz)
+	// 850μs → OCR=53, 2000μs → OCR=125
+	uint16_t pwm_value = ((uint32_t)(rc_value - 850) * (125 - 53)) / (2000 - 850) + 53;
+	if (pwm_value > 125) pwm_value = 125;
+	if (pwm_value < 53) pwm_value = 53;
 	return pwm_value;
 }
 
@@ -552,8 +547,8 @@ static void vtask_flight_control(void *pvParameters) {
 				}
 			} else {
 				// Modo desarmado: todos os motores em mínimo
-				OCR1A = 62;  // 1000μs - Motor 1
-				OCR1B = 62;  // 1000μs - Motor 2
+				OCR1A = 53;  // 850μs - Motor 1
+				OCR1B = 53;  // 850μs - Motor 2
 				OCR2A = 15;  // 1000μs - Motor 3
 				OCR2B = 15;  // 1000μs - Motor 4
 			}

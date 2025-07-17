@@ -4,7 +4,7 @@
 # Uso: ./monitor.sh [porta_serial]
 
 PORT=${1:-/dev/ttyUSB0}
-BAUD=115200
+BAUD=57600
 
 echo "🚁 Nano-Drone Monitor"
 echo "===================="
