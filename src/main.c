@@ -73,10 +73,20 @@ void setup()
 	EICRA = 0x03;  // Aciona a interrupção INT0 na borda de subida
 	EIMSK = 0x01;  // Habilita a interrupção INT0	PD2
 
-	TCCR0A = 0x02; // ctc mode
-	TCCR0B = 0x02; // prescaler8
-	TIMSK0 = (1 << OCIE0A);     // Habilita interrupção de comparação
-	OCR0A = 249;
+	// TCCR0A = 0x02; // ctc mode
+	// TCCR0B = 0x02; // prescaler8
+	// TIMSK0 = (1 << OCIE0A);     // Habilita interrupção de comparação
+	// OCR0A = 160;
+
+	// Fast PWM, non-inverting mode (Clear OC0A on Compare Match, set at BOTTOM)
+    TCCR0A = (1 << COM0A1) | (1 << WGM01) | (1 << WGM00);
+    TCCR0B = (1 << CS02); // Prescaler 1
+
+    // Frequência base: 16MHz / 64 = 250kHz
+    // Cada ciclo = 4µs
+    // Para 870µs ativo: 870 / 4 = ~217
+    OCR0A = 10;
+
 
 	sei();
 
@@ -123,12 +133,12 @@ static void vtask_mpu6050(void *pvParameters)
 		int16_t pitch_tenths = fast_atan2_degrees(-mpu_data.accel_x, mpu_data.accel_z);
 
 		// Envia dados do MPU6050 pela USART (apenas aceleração e ângulos)
-		USART_send_string("[MPU6050] ");
-		USART_send_string(" | Roll (°):"); USART_send_int(roll_tenths / 10);
-		USART_send_string("."); USART_send_int(abs(roll_tenths % 10));
-		USART_send_string(" Pitch (°):"); USART_send_int(pitch_tenths / 10);
-		USART_send_string("."); USART_send_int(abs(pitch_tenths % 10));
-		USART_send_string("\r\n");
+		// USART_send_string("[MPU6050] ");
+		// USART_send_string(" | Roll (°):"); USART_send_int(roll_tenths / 10);
+		// USART_send_string("."); USART_send_int(abs(roll_tenths % 10));
+		// USART_send_string(" Pitch (°):"); USART_send_int(pitch_tenths / 10);
+		// USART_send_string("."); USART_send_int(abs(pitch_tenths % 10));
+		// USART_send_string("\r\n");
 
 		// Delay de 1 segundo entre leituras para melhor visualização
 		vTaskDelay(pdMS_TO_TICKS(1000));
@@ -162,7 +172,7 @@ static void vtask_rc(void *pvParameters)
 			// USART_send_string("\r\n");
 		}
 
-		vTaskDelay(pdMS_TO_TICKS(100));
+		vTaskDelay(pdMS_TO_TICKS(1000));
 	}
 }
 
@@ -193,18 +203,20 @@ ISR(INT0_vect)
 	}
 }
 
-ISR(TIMER0_COMPA_vect) {
-	static uint8_t count = 0;
-	count++;
-	if (count >= 100) {
-		PORTD |= (1 << PD6);
-	}
-	if (count >= 200) {
-		PORTD &= ~(1 << PD6);
-	}
+// ISR(TIMER0_COMPA_vect) {
+// 	// static uint8_t count = 0;
+// 	// count++;
+// 	// if (count >= 100) {
+// 	// 	PORTD |= (1 << PD6);
+// 	// }
+// 	// if (count >= 200) {
+// 	// 	PORTD &= ~(1 << PD6);
+// 	// }
 
-	if (count >= 2000) {
-		count = 0;
-	}
+// 	// if (count >= 2000) {
+// 	// 	count = 0;
+// 	// }
 
-}
+
+// }
+
