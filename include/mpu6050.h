@@ -38,14 +38,33 @@ typedef struct {
     int16_t gyro_x;
     int16_t gyro_y;
     int16_t gyro_z;
+    // Ângulos calculados (adicionados para PID)
+    float angle_x;  // Roll em graus
+    float angle_y;  // Pitch em graus  
+    float angle_z;  // Yaw rate em graus/s
 } mpu6050_data_t;
+
+// Estrutura para filtro complementar
+typedef struct {
+    float angle_x;          // Ângulo X filtrado
+    float angle_y;          // Ângulo Y filtrado
+    float gyro_x_bias;      // Offset do giroscópio X
+    float gyro_y_bias;      // Offset do giroscópio Y
+    float gyro_z_bias;      // Offset do giroscópio Z
+    uint8_t calibrated;     // Flag de calibração
+} complementary_filter_t;
 
 // Funções do MPU6050
 void mpu6050_init(void);
 uint8_t mpu6050_read_register(uint8_t reg);
 void mpu6050_write_register(uint8_t reg, uint8_t data);
-void mpu6050_read_all(mpu6050_data_t *data);
-uint8_t mpu6050_test_connection(void);
+uint8_t mpu6050_read_all(mpu6050_data_t *data);
+uint8_t mpu6050_test_connection(void);  // Função de teste
+
+// Funções do filtro complementar
+void complementary_filter_init(complementary_filter_t *filter);
+void complementary_filter_update(complementary_filter_t *filter, mpu6050_data_t *data);
+void complementary_filter_calibrate(complementary_filter_t *filter, mpu6050_data_t *data);
 
 // Funções I2C
 void i2c_init(void);

@@ -90,7 +90,7 @@ uint8_t mpu6050_read_register(uint8_t reg) {
 }
 
 // Lê todos os dados do MPU6050
-void mpu6050_read_all(mpu6050_data_t *data) {
+uint8_t mpu6050_read_all(mpu6050_data_t *data) {
     uint8_t raw_data[14];
     
     i2c_start();
@@ -115,10 +115,95 @@ void mpu6050_read_all(mpu6050_data_t *data) {
     data->gyro_x = (int16_t)(raw_data[8] << 8 | raw_data[9]);
     data->gyro_y = (int16_t)(raw_data[10] << 8 | raw_data[11]);
     data->gyro_z = (int16_t)(raw_data[12] << 8 | raw_data[13]);
+    
+    return 1; // Sucesso
 }
 
 // Testa a conexão com o MPU6050
 uint8_t mpu6050_test_connection(void) {
     uint8_t who_am_i = mpu6050_read_register(MPU6050_WHO_AM_I);
     return (who_am_i == 0x68);  // Valor esperado do WHO_AM_I
+}
+
+// Implementação do filtro complementar
+#include "flight_config.h"
+
+// Inicializa o filtro complementar
+void complementary_filter_init(complementary_filter_t *filter) {
+    filter->angle_x = 0.0f;
+    filter->angle_y = 0.0f;
+    filter->gyro_x_bias = 0.0f;
+    filter->gyro_y_bias = 0.0f;
+    filter->gyro_z_bias = 0.0f;
+    filter->calibrated = 0;
+}
+
+// Calibra o filtro complementar (deve ser chamado com drone parado)
+void complementary_filter_calibrate(complementary_filter_t *filter, mpu6050_data_t *data) {
+    static uint16_t sample_count = 0;
+    static float gyro_x_sum = 0.0f;
+    static float gyro_y_sum = 0.0f;
+    static float gyro_z_sum = 0.0f;
+    
+    if (sample_count < CALIBRATION_SAMPLES) {
+        // Acumula amostras
+        gyro_x_sum += data->gyro_x;
+        gyro_y_sum += data->gyro_y;
+        gyro_z_sum += data->gyro_z;
+        sample_count++;
+        
+        // Calcula ângulos iniciais do acelerômetro
+        if (sample_count == 1) {
+            float accel_x_g = data->accel_x / ACCEL_SENSITIVITY;
+            float accel_y_g = data->accel_y / ACCEL_SENSITIVITY;
+            float accel_z_g = data->accel_z / ACCEL_SENSITIVITY;
+            
+            // Calcula ângulos iniciais (assumindo drone parado)
+            filter->angle_x = atan2(accel_y_g, accel_z_g) * 180.0f / 3.14159f;
+            filter->angle_y = atan2(-accel_x_g, sqrt(accel_y_g * accel_y_g + accel_z_g * accel_z_g)) * 180.0f / 3.14159f;
+        }
+        
+    } else if (sample_count == CALIBRATION_SAMPLES) {
+        // Calcula offsets médios
+        filter->gyro_x_bias = gyro_x_sum / CALIBRATION_SAMPLES;
+        filter->gyro_y_bias = gyro_y_sum / CALIBRATION_SAMPLES;
+        filter->gyro_z_bias = gyro_z_sum / CALIBRATION_SAMPLES;
+        filter->calibrated = 1;
+        
+        // Reset para próxima calibração
+        sample_count = 0;
+        gyro_x_sum = 0.0f;
+        gyro_y_sum = 0.0f;
+        gyro_z_sum = 0.0f;
+    }
+}
+
+// Atualiza o filtro complementar
+void complementary_filter_update(complementary_filter_t *filter, mpu6050_data_t *data) {
+    // Converte dados do giroscópio para °/s (remove bias)
+    float gyro_x_dps = (data->gyro_x - filter->gyro_x_bias) / GYRO_SENSITIVITY;
+    float gyro_y_dps = (data->gyro_y - filter->gyro_y_bias) / GYRO_SENSITIVITY;
+    float gyro_z_dps = (data->gyro_z - filter->gyro_z_bias) / GYRO_SENSITIVITY;
+    
+    // Converte acelerômetro para g
+    float accel_x_g = data->accel_x / ACCEL_SENSITIVITY;
+    float accel_y_g = data->accel_y / ACCEL_SENSITIVITY;
+    float accel_z_g = data->accel_z / ACCEL_SENSITIVITY;
+    
+    // Calcula ângulos do acelerômetro
+    float accel_angle_x = atan2(accel_y_g, accel_z_g) * 180.0f / 3.14159f;
+    float accel_angle_y = atan2(-accel_x_g, sqrt(accel_y_g * accel_y_g + accel_z_g * accel_z_g)) * 180.0f / 3.14159f;
+    
+    // Integra giroscópio
+    filter->angle_x += gyro_x_dps * FILTER_DT;
+    filter->angle_y += gyro_y_dps * FILTER_DT;
+    
+    // Filtro complementar
+    filter->angle_x = COMPLEMENTARY_FILTER_ALPHA * filter->angle_x + (1.0f - COMPLEMENTARY_FILTER_ALPHA) * accel_angle_x;
+    filter->angle_y = COMPLEMENTARY_FILTER_ALPHA * filter->angle_y + (1.0f - COMPLEMENTARY_FILTER_ALPHA) * accel_angle_y;
+    
+    // Atualiza dados de saída
+    data->angle_x = filter->angle_x;
+    data->angle_y = filter->angle_y;
+    data->angle_z = gyro_z_dps; // Yaw rate diretamente do giroscópio
 }

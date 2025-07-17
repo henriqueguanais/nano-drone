@@ -9,16 +9,39 @@
 
 #include "USART.h"
 #include "mpu6050.h"
+#include "flight_config.h"
 
 #define RC_CHANNELS 6
 #define PPM_SYNC_TIME 3000 // Tempo de sincronização do PPM em microssegundos
 
+// Estrutura para controle PID
+typedef struct {
+    float kp, ki, kd;          // Ganhos PID
+    float previous_error;      // Erro anterior para derivativo
+    float integral;            // Soma dos erros para integral
+    float output_min, output_max; // Limites de saída
+    uint32_t last_time;        // Timestamp da última execução
+} pid_controller_t;
+
+// Estrutura para dados de controle de voo
+typedef struct {
+    int16_t throttle;          // Throttle do RC
+    int16_t pitch_setpoint;    // Setpoint de pitch (normalmente 0)
+    int16_t roll_setpoint;     // Setpoint de roll (normalmente 0) 
+    int16_t yaw_rate_setpoint; // Setpoint de taxa de yaw
+    uint8_t armed;             // Status de armamento
+} flight_control_t;
+
 void setup(void);
 static void vtask_rc(void *pvParameters);
 static void vtask_mpu6050(void *pvParameters);
+static void vtask_flight_control(void *pvParameters);
 uint16_t map_rc_to_pwm(uint16_t rc_value);
 uint8_t map_rc_to_pwm_8bit(uint16_t rc_value);
 uint32_t get_timer0_microseconds(void);
+float pid_calculate(pid_controller_t *pid, float setpoint, float measured_value, uint32_t current_time);
+void update_motor_control(flight_control_t *flight_ctrl, float pitch_correction, float roll_correction, float yaw_correction);
+void init_pid_controllers(void);
 
 const int16_t atan_lookup[51] = {
 	0,    57,   114,  171,  228,  284,  340,  395,  449,  503,  // 0.0-0.9
@@ -50,18 +73,34 @@ int16_t fast_atan2_degrees(int16_t y, int16_t z) {
 }
 
 QueueHandle_t xQueueRC;
+QueueHandle_t xQueueIMU;        // Fila para dados do IMU
+QueueHandle_t xQueueFlightCtrl; // Fila para dados de controle de voo
 
 // Variável para criar timer virtual de 16 bits com Timer0 de 8 bits
 volatile uint16_t timer0_overflow_count = 0;
+
+// Controladores PID globais
+pid_controller_t pid_pitch;
+pid_controller_t pid_roll;
+pid_controller_t pid_yaw;
 
 int main(void)
 {
 	setup();
 
-	xQueueRC = xQueueCreate(1, sizeof(uint16_t) * RC_CHANNELS);
+	// Inicializa controladores PID
+	init_pid_controllers();
 
-	xTaskCreate(vtask_rc, (const char *)"serial", 128, NULL, 1, NULL);
-	xTaskCreate(vtask_mpu6050, (const char *)"mpu6050", 192, NULL, 1, NULL);
+	// Cria filas
+	xQueueRC = xQueueCreate(1, sizeof(uint16_t) * RC_CHANNELS);
+	xQueueIMU = xQueueCreate(1, sizeof(mpu6050_data_t));
+	xQueueFlightCtrl = xQueueCreate(1, sizeof(flight_control_t));
+
+	// Cria tasks
+	xTaskCreate(vtask_rc, (const char *)"rc", 128, NULL, 1, NULL);
+	xTaskCreate(vtask_mpu6050, (const char *)"mpu6050", 192, NULL, 2, NULL);
+	xTaskCreate(vtask_flight_control, (const char *)"flight", 256, NULL, 3, NULL);
+	
 	vTaskStartScheduler();
 	for (;;);
 }
@@ -108,13 +147,48 @@ void setup()
 	mpu6050_init();
 }
 
+// Inicializa os controladores PID com valores conservadores
+void init_pid_controllers(void) {
+	// PID para Pitch (eixo Y)
+	pid_pitch.kp = PID_PITCH_KP;
+	pid_pitch.ki = PID_PITCH_KI;
+	pid_pitch.kd = PID_PITCH_KD;
+	pid_pitch.previous_error = 0;
+	pid_pitch.integral = 0;
+	pid_pitch.output_min = PID_PITCH_MIN;
+	pid_pitch.output_max = PID_PITCH_MAX;
+	pid_pitch.last_time = 0;
+	
+	// PID para Roll (eixo X)
+	pid_roll.kp = PID_ROLL_KP;
+	pid_roll.ki = PID_ROLL_KI;
+	pid_roll.kd = PID_ROLL_KD;
+	pid_roll.previous_error = 0;
+	pid_roll.integral = 0;
+	pid_roll.output_min = PID_ROLL_MIN;
+	pid_roll.output_max = PID_ROLL_MAX;
+	pid_roll.last_time = 0;
+	
+	// PID para Yaw (taxa de rotação Z)
+	pid_yaw.kp = PID_YAW_KP;
+	pid_yaw.ki = PID_YAW_KI;
+	pid_yaw.kd = PID_YAW_KD;
+	pid_yaw.previous_error = 0;
+	pid_yaw.integral = 0;
+	pid_yaw.output_min = PID_YAW_MIN;
+	pid_yaw.output_max = PID_YAW_MAX;
+	pid_yaw.last_time = 0;
+}
+
 static void vtask_mpu6050(void *pvParameters)
 {
 	mpu6050_data_t mpu_data;
+	complementary_filter_t filter;
 	uint32_t sample_count = 0;
 	uint8_t led_state = 0;
 	
-	// Debug: Task iniciada
+	// Inicializa filtro complementar
+	complementary_filter_init(&filter);
 	
 	if (!mpu6050_test_connection()) {
 		// Se não conseguir conectar, envia erro pela serial
@@ -128,34 +202,56 @@ static void vtask_mpu6050(void *pvParameters)
 		}
 	}
 	
+	USART_send_string("IMU inicializado. Calibrando...\r\n");
 	
 	for (;;)
 	{
-		// Controle do LED (pisca a cada leitura)
-		led_state = !led_state;
-		if (led_state) {
-			PORTB |= (1 << PB5);  // Liga LED
-		} else {
-			PORTB &= ~(1 << PB5); // Desliga LED
+		// Controle do LED (pisca a cada 25 leituras = ~0.5s)
+		if (++sample_count % 25 == 0) {
+			led_state = !led_state;
+			if (led_state) {
+				PORTB |= (1 << PB5);  // Liga LED
+			} else {
+				PORTB &= ~(1 << PB5); // Desliga LED
+			}
 		}
+		
 		// Lê todos os dados do MPU6050
-		mpu6050_read_all(&mpu_data);
-		sample_count++;
+		if (mpu6050_read_all(&mpu_data)) {
+			// Fase de calibração
+			if (!filter.calibrated) {
+				complementary_filter_calibrate(&filter, &mpu_data);
+				if (filter.calibrated) {
+					USART_send_string("Calibracao concluida! Pronto para voo.\r\n");
+				}
+			} else {
+				// Filtro complementar para ângulos precisos
+				complementary_filter_update(&filter, &mpu_data);
+			}
+			
+			// Envia dados para fila do controle de voo
+			xQueueSend(xQueueIMU, &mpu_data, 0);
+			
+			// Debug a cada 1 segundo (50 samples)
+			if (sample_count % DEBUG_IMU_DIVIDER == 0) {
+				USART_send_string("Roll: ");
+				USART_send_int((int16_t)mpu_data.angle_x);
+				USART_send_string("° | Pitch: ");
+				USART_send_int((int16_t)mpu_data.angle_y);
+				USART_send_string("° | YawRate: ");
+				USART_send_int((int16_t)mpu_data.angle_z);
+				USART_send_string("°/s");
+				
+				// Indicador de calibração
+				if (!filter.calibrated) {
+					USART_send_string(" [CAL]");
+				}
+				USART_send_string("\r\n");
+			}
+		}
 
-		// Calcula ângulos usando tabela de lookup (sem math.h)
-		// int16_t roll_tenths = fast_atan2_degrees(mpu_data.accel_y, mpu_data.accel_z);
-		// int16_t pitch_tenths = fast_atan2_degrees(-mpu_data.accel_x, mpu_data.accel_z);
-
-		// Envia dados do MPU6050 pela USART (apenas aceleração e ângulos)
-		// USART_send_string("[MPU6050] ");
-		// USART_send_string(" | Roll (°):"); USART_send_int(roll_tenths / 10);
-		// USART_send_string("."); USART_send_int(abs(roll_tenths % 10));
-		// USART_send_string(" Pitch (°):"); USART_send_int(pitch_tenths / 10);
-		// USART_send_string("."); USART_send_int(abs(pitch_tenths % 10));
-		// USART_send_string("\r\n");
-
-		// Delay de 1 segundo entre leituras para melhor visualização
-		vTaskDelay(pdMS_TO_TICKS(1000));
+		// Task roda a 50Hz (20ms) para controle preciso
+		vTaskDelay(pdMS_TO_TICKS(1000/TASK_IMU_FREQ));
 	}
 }
 
@@ -164,6 +260,14 @@ static void vtask_rc(void *pvParameters)
 {
 	BaseType_t xStatus;
 	uint16_t rc_local_values[RC_CHANNELS] = {0};
+	flight_control_t flight_ctrl = {0};
+	
+	// Inicializa estrutura de controle de voo
+	flight_ctrl.throttle = 1000;
+	flight_ctrl.pitch_setpoint = 0;
+	flight_ctrl.roll_setpoint = 0;
+	flight_ctrl.yaw_rate_setpoint = 0;
+	flight_ctrl.armed = 0;
 
 	for (;;)
 	{
@@ -171,46 +275,45 @@ static void vtask_rc(void *pvParameters)
 
 		if (xStatus == pdPASS)
 		{
-			// Aplica o valor do canal 3 (throttle) a todos os 4 motores
-			uint16_t throttle_value = rc_local_values[2];
-			if (throttle_value >= 990 && throttle_value <= 2900) {
-				uint16_t pwm_value = map_rc_to_pwm(throttle_value);
-				uint8_t pwm_value_8bit = map_rc_to_pwm_8bit(throttle_value);
-				
-				// Motor 1 (PB1) - Timer1 OC1A
-				OCR1A = pwm_value;
-				
-				// Motor 2 (PB2) - Timer1 OC1B
-				OCR1B = pwm_value;
-				
-				// Motor 3 (PB3) - Timer2 OC2A
-				OCR2A = pwm_value_8bit;
-				
-				// Motor 4 (PD3) - Timer2 OC2B
-				OCR2B = pwm_value_8bit;
+			// Mapeia canais RC para controle de voo
+			flight_ctrl.throttle = rc_local_values[2];           // Canal 3 (throttle)
+			flight_ctrl.pitch_setpoint = (rc_local_values[1] - RC_CENTER_VALUE) / RC_PITCH_SCALE;
+			flight_ctrl.roll_setpoint = (rc_local_values[0] - RC_CENTER_VALUE) / RC_ROLL_SCALE;
+			flight_ctrl.yaw_rate_setpoint = (rc_local_values[3] - RC_CENTER_VALUE) / RC_YAW_SCALE;
+			
+			// Lógica de armamento
+			if (rc_local_values[ARM_CHANNEL] > ARM_THRESHOLD && flight_ctrl.throttle < ARM_THROTTLE_MAX) {
+				flight_ctrl.armed = 1;
+			} else if (rc_local_values[ARM_CHANNEL] < ARM_THRESHOLD) {
+				flight_ctrl.armed = 0;
 			}
 			
-			// Exibe todos os canais via USART
-			USART_send_string("CH1: ");
-			USART_send_int(rc_local_values[0]);
-			USART_send_string(" | CH2: ");
-			USART_send_int(rc_local_values[1]);
-			USART_send_string(" | CH3: ");
-			USART_send_int(rc_local_values[2]);
-			USART_send_string(" | CH4: ");
-			USART_send_int(rc_local_values[3]);
-			USART_send_string(" | M1: ");
-			USART_send_int(OCR1A);
-			USART_send_string(" | M2: ");
-			USART_send_int(OCR1B);
-			USART_send_string(" | M3: ");
-			USART_send_int(OCR2A);
-			USART_send_string(" | M4: ");
-			USART_send_int(OCR2B);
+			// Limita setpoints para segurança
+			if (flight_ctrl.pitch_setpoint > MAX_PITCH_ANGLE) flight_ctrl.pitch_setpoint = MAX_PITCH_ANGLE;
+			if (flight_ctrl.pitch_setpoint < -MAX_PITCH_ANGLE) flight_ctrl.pitch_setpoint = -MAX_PITCH_ANGLE;
+			if (flight_ctrl.roll_setpoint > MAX_ROLL_ANGLE) flight_ctrl.roll_setpoint = MAX_ROLL_ANGLE;
+			if (flight_ctrl.roll_setpoint < -MAX_ROLL_ANGLE) flight_ctrl.roll_setpoint = -MAX_ROLL_ANGLE;
+			if (flight_ctrl.yaw_rate_setpoint > MAX_YAW_RATE) flight_ctrl.yaw_rate_setpoint = MAX_YAW_RATE;
+			if (flight_ctrl.yaw_rate_setpoint < -MAX_YAW_RATE) flight_ctrl.yaw_rate_setpoint = -MAX_YAW_RATE;
+			
+			// Envia dados para task de controle de voo
+			xQueueSend(xQueueFlightCtrl, &flight_ctrl, 0);
+			
+			// Debug via USART
+			USART_send_string("RC: T=");
+			USART_send_int(flight_ctrl.throttle);
+			USART_send_string(" P=");
+			USART_send_int(flight_ctrl.pitch_setpoint);
+			USART_send_string(" R=");
+			USART_send_int(flight_ctrl.roll_setpoint);
+			USART_send_string(" Y=");
+			USART_send_int(flight_ctrl.yaw_rate_setpoint);
+			USART_send_string(" ARM=");
+			USART_send_int(flight_ctrl.armed);
 			USART_send_string("\r\n");
 		}
 
-		vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms para resposta mais rápida
+		vTaskDelay(pdMS_TO_TICKS(1000/TASK_RC_FREQ)); // Atualiza a cada 50ms para resposta mais rápida
 	}
 }
 
@@ -317,6 +420,147 @@ ISR(INT0_vect)
 	// Chama o scheduler do FreeRTOS se necessário
 	if (xHigherPriorityTaskWoken == pdTRUE) {
 		taskYIELD();
+	}
+}
+
+// Função PID para cálculo de correção
+float pid_calculate(pid_controller_t *pid, float setpoint, float measured_value, uint32_t current_time) {
+	float error = setpoint - measured_value;
+	float dt = (current_time - pid->last_time) / 1000.0; // Converte para segundos
+	
+	// Evita divisão por zero na primeira execução
+	if (pid->last_time == 0 || dt <= 0) {
+		pid->last_time = current_time;
+		pid->previous_error = error;
+		return 0;
+	}
+	
+	// Termo proporcional
+	float p_term = pid->kp * error;
+	
+	// Termo integral (com limitação anti-windup)
+	pid->integral += error * dt;
+	float i_term = pid->ki * pid->integral;
+	
+	// Termo derivativo
+	float d_term = pid->kd * (error - pid->previous_error) / dt;
+	
+	// Saída total
+	float output = p_term + i_term + d_term;
+	
+	// Limitação da saída
+	if (output > pid->output_max) {
+		output = pid->output_max;
+		// Anti-windup: reduz integral se saída saturou
+		if (pid->ki > 0) {
+			pid->integral = (pid->output_max - p_term - d_term) / pid->ki;
+		}
+	}
+	if (output < pid->output_min) {
+		output = pid->output_min;
+		// Anti-windup: reduz integral se saída saturou
+		if (pid->ki > 0) {
+			pid->integral = (pid->output_min - p_term - d_term) / pid->ki;
+		}
+	}
+	
+	// Atualiza valores para próxima iteração
+	pid->previous_error = error;
+	pid->last_time = current_time;
+	
+	return output;
+}
+
+// Função para atualizar controle dos motores com PID
+void update_motor_control(flight_control_t *flight_ctrl, float pitch_correction, float roll_correction, float yaw_correction) {
+	// Converte throttle para faixa base (1000-2000)
+	int16_t base_throttle = flight_ctrl->throttle;
+	
+	// Cálculo individual para cada motor baseado no layout X:
+	//   M1    M2
+	//     \  /
+	//      ><
+	//     /  \
+	//   M4    M3
+	
+	int16_t motor1 = base_throttle - (int16_t)pitch_correction - (int16_t)roll_correction - (int16_t)yaw_correction;
+	int16_t motor2 = base_throttle - (int16_t)pitch_correction + (int16_t)roll_correction + (int16_t)yaw_correction;
+	int16_t motor3 = base_throttle + (int16_t)pitch_correction + (int16_t)roll_correction - (int16_t)yaw_correction;
+	int16_t motor4 = base_throttle + (int16_t)pitch_correction - (int16_t)roll_correction + (int16_t)yaw_correction;
+	
+	// Limitação de segurança
+	if (motor1 < 1000) motor1 = 1000;
+	if (motor1 > 2000) motor1 = 2000;
+	if (motor2 < 1000) motor2 = 1000;
+	if (motor2 > 2000) motor2 = 2000;
+	if (motor3 < 1000) motor3 = 1000;
+	if (motor3 > 2000) motor3 = 2000;
+	if (motor4 < 1000) motor4 = 1000;
+	if (motor4 > 2000) motor4 = 2000;
+	
+	// Aplicação dos valores PWM
+	OCR1A = map_rc_to_pwm(motor1);         // Motor 1 (Timer1)
+	OCR1B = map_rc_to_pwm(motor2);         // Motor 2 (Timer1)
+	OCR2A = map_rc_to_pwm_8bit(motor3);    // Motor 3 (Timer2)
+	OCR2B = map_rc_to_pwm_8bit(motor4);    // Motor 4 (Timer2)
+}
+
+// Task principal de controle de voo
+static void vtask_flight_control(void *pvParameters) {
+	mpu6050_data_t imu_data;
+	flight_control_t flight_ctrl = {0};
+	uint32_t current_time;
+	
+	// Valores iniciais
+	flight_ctrl.throttle = 1000;          // Throttle mínimo
+	flight_ctrl.pitch_setpoint = 0;       // Nível
+	flight_ctrl.roll_setpoint = 0;        // Nível
+	flight_ctrl.yaw_rate_setpoint = 0;    // Sem rotação
+	flight_ctrl.armed = 0;                // Desarmado
+	
+	for (;;) {
+		// Recebe dados do IMU (non-blocking)
+		if (xQueueReceive(xQueueIMU, &imu_data, 0) == pdPASS) {
+			// Recebe dados de controle de voo (non-blocking)
+			xQueueReceive(xQueueFlightCtrl, &flight_ctrl, 0);
+			
+			// Só executa PID se armado e com throttle > mínimo
+			if (flight_ctrl.armed && flight_ctrl.throttle > 1050) {
+				current_time = get_timer0_microseconds() / 1000; // Converte para ms
+				
+				// Calcula correções PID
+				float pitch_correction = pid_calculate(&pid_pitch, flight_ctrl.pitch_setpoint, imu_data.angle_y, current_time);
+				float roll_correction = pid_calculate(&pid_roll, flight_ctrl.roll_setpoint, imu_data.angle_x, current_time);
+				float yaw_correction = pid_calculate(&pid_yaw, flight_ctrl.yaw_rate_setpoint, imu_data.angle_z, current_time);
+				
+				// Aplica controle aos motores
+				update_motor_control(&flight_ctrl, pitch_correction, roll_correction, yaw_correction);
+				
+				// Debug a cada 10 ciclos (~200ms)
+				static uint8_t debug_counter = 0;
+				if (++debug_counter >= DEBUG_FLIGHT_DIVIDER) {
+					debug_counter = 0;
+					USART_send_string("PID: P=");
+					USART_send_int((int16_t)pitch_correction);
+					USART_send_string(" R=");
+					USART_send_int((int16_t)roll_correction);
+					USART_send_string(" Y=");
+					USART_send_int((int16_t)yaw_correction);
+					USART_send_string(" T=");
+					USART_send_int(flight_ctrl.throttle);
+					USART_send_string("\r\n");
+				}
+			} else {
+				// Modo desarmado: todos os motores em mínimo
+				OCR1A = 62;  // 1000μs - Motor 1
+				OCR1B = 62;  // 1000μs - Motor 2
+				OCR2A = 15;  // 1000μs - Motor 3
+				OCR2B = 15;  // 1000μs - Motor 4
+			}
+		}
+		
+		// Task roda a 50Hz (20ms) para controle preciso
+		vTaskDelay(pdMS_TO_TICKS(1000/TASK_FLIGHT_FREQ));
 	}
 }
 
