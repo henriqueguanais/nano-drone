@@ -54,12 +54,6 @@ QueueHandle_t xQueueRC;
 // Variável para criar timer virtual de 16 bits com Timer0 de 8 bits
 volatile uint16_t timer0_overflow_count = 0;
 
-// Variáveis para PWM por software (motores 3 e 4)
-volatile uint16_t pwm_cycle_count = 0;
-volatile uint16_t motor3_pwm_value = 55;  // Valor inicial (900us)
-volatile uint16_t motor4_pwm_value = 55;  // Valor inicial (900us)
-volatile uint8_t pwm_state = 0;           // Estado atual do ciclo PWM
-
 int main(void)
 {
 	setup();
@@ -79,16 +73,24 @@ void setup()
 	DDRD = 0x00;           // Configura PORTD como entrada
 
 	DDRD &= ~(1 << PD2);   // Garante que PD2 seja entrada (receptor PPM)
-	DDRD |= (1 << PD4) | (1 << PD5); // Define PD4 e PD5 como saída (motores 3 e 4)
-	DDRB |= (1 << PB1) | (1 << PB2); // Define PB1 (OC1A) e PB2 (OC1B) como saída para PWM
+	DDRD |= (1 << PD3);    // Define PD3 (OC2B) como saída para PWM - Motor 4
+	DDRB |= (1 << PB1) | (1 << PB2) | (1 << PB3) | (1 << PB5); // Define PB1 (OC1A), PB2 (OC1B), PB3 (OC2A) como saída para PWM e PB5 para LED
 
 	// Configura Timer1 para Fast PWM (TOP = ICR1), 50 Hz
 	TCCR1A = (1 << COM1A1) | (1 << COM1B1) | (1 << WGM11); // Fast PWM, modo 14, habilita OC1A e OC1B
 	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS12); // Prescaler 256
-	ICR1 = 1249; // 50 Hz 
-	OCR1A = 55;  // 900 us - Motor 1 (PB1)
-	OCR1B = 55;  // 900 us - Motor 2 (PB2)
-	TIMSK1 = (1 << TOIE1); // Habilita interrupção de overflow do Timer1 para PWM software
+	ICR1 = 1249; // 50 Hz (16MHz / (256 * 1250) = 50Hz)
+	OCR1A = 62;  // 1000μs (1ms) - Motor 1 (PB1) - posição de armamento ESC
+	OCR1B = 62;  // 1000μs (1ms) - Motor 2 (PB2) - posição de armamento ESC
+	TIMSK1 = 0x00; // Desabilita interrupções do Timer1
+	
+	// Configura Timer2 para Fast PWM, ~61Hz (mais próximo possível de 50Hz com Timer 8-bit)
+	// Frequência = 16MHz / (prescaler × 256) = 16MHz / (1024 × 256) = ~61Hz
+	TCCR2A = (1 << COM2A1) | (1 << COM2B1) | (1 << WGM21) | (1 << WGM20); // Fast PWM mode
+	TCCR2B = (1 << CS22) | (1 << CS21) | (1 << CS20); // Prescaler 1024
+	OCR2A = 15;  // Motor 3 (PB3) - ~1000μs (1ms) - posição de armamento ESC
+	OCR2B = 15;  // Motor 4 (PD3) - ~1000μs (1ms) - posição de armamento ESC
+	TIMSK2 = 0x00; // Desabilita interrupções do Timer2
 	
 	// Configura Timer0 para contagem de tempo (PPM timing)
 	TCCR0A = 0x00; // Normal mode
@@ -169,32 +171,23 @@ static void vtask_rc(void *pvParameters)
 
 		if (xStatus == pdPASS)
 		{
-			// Aplica o valor do canal 3 (throttle) ao Motor 1 (PB1)
+			// Aplica o valor do canal 3 (throttle) a todos os 4 motores
 			uint16_t throttle_value = rc_local_values[2];
 			if (throttle_value >= 990 && throttle_value <= 2900) {
-				OCR1A = map_rc_to_pwm(throttle_value);
-			}
-			
-			// Aplica o valor do canal 2 ao Motor 2 (PB2)
-			uint16_t motor2_value = rc_local_values[1];
-			if (motor2_value >= 990 && motor2_value <= 2900) {
-				OCR1B = map_rc_to_pwm(motor2_value);
-			}
-			
-			// Aplica o valor do canal 1 ao Motor 3 (PD4) - PWM por software
-			uint16_t motor3_value = rc_local_values[0];
-			if (motor3_value >= 990 && motor3_value <= 2900) {
-				cli();
-				motor3_pwm_value = map_rc_to_pwm(motor3_value);
-				sei();
-			}
-			
-			// Aplica o valor do canal 4 ao Motor 4 (PD5) - PWM por software
-			uint16_t motor4_value = rc_local_values[3];
-			if (motor4_value >= 990 && motor4_value <= 2900) {
-				cli();
-				motor4_pwm_value = map_rc_to_pwm(motor4_value);
-				sei();
+				uint16_t pwm_value = map_rc_to_pwm(throttle_value);
+				uint8_t pwm_value_8bit = map_rc_to_pwm_8bit(throttle_value);
+				
+				// Motor 1 (PB1) - Timer1 OC1A
+				OCR1A = pwm_value;
+				
+				// Motor 2 (PB2) - Timer1 OC1B
+				OCR1B = pwm_value;
+				
+				// Motor 3 (PB3) - Timer2 OC2A
+				OCR2A = pwm_value_8bit;
+				
+				// Motor 4 (PD3) - Timer2 OC2B
+				OCR2B = pwm_value_8bit;
 			}
 			
 			// Exibe todos os canais via USART
@@ -211,9 +204,9 @@ static void vtask_rc(void *pvParameters)
 			USART_send_string(" | M2: ");
 			USART_send_int(OCR1B);
 			USART_send_string(" | M3: ");
-			USART_send_int(motor3_pwm_value);
+			USART_send_int(OCR2A);
 			USART_send_string(" | M4: ");
-			USART_send_int(motor4_pwm_value);
+			USART_send_int(OCR2B);
 			USART_send_string("\r\n");
 		}
 
@@ -225,31 +218,6 @@ static void vtask_rc(void *pvParameters)
 ISR(TIMER0_OVF_vect)
 {
 	timer0_overflow_count++;
-}
-
-// ISR do overflow do Timer1 para PWM por software (motores 3 e 4)
-ISR(TIMER1_OVF_vect)
-{
-	pwm_cycle_count++;
-	
-	// A cada overflow do Timer1 (~50Hz), reseta o ciclo PWM
-	if (pwm_cycle_count >= 1250) { // ICR1 = 1249, então overflow a cada ~20ms
-		pwm_cycle_count = 0;
-		pwm_state = 0;
-		
-		// Inicia pulso alto nos dois motores
-		PORTD |= (1 << PD4) | (1 << PD5);
-	}
-	
-	// Controla o duty cycle do Motor 3 (PD4)
-	if (pwm_cycle_count >= motor3_pwm_value && (PORTD & (1 << PD4))) {
-		PORTD &= ~(1 << PD4); // Desliga Motor 3
-	}
-	
-	// Controla o duty cycle do Motor 4 (PD5)
-	if (pwm_cycle_count >= motor4_pwm_value && (PORTD & (1 << PD5))) {
-		PORTD &= ~(1 << PD5); // Desliga Motor 4
-	}
 }
 
 // Função para obter o tempo atual em microssegundos (resolução de 0.5 us)
@@ -277,14 +245,18 @@ uint16_t map_rc_to_pwm(uint16_t rc_value) {
 	if (rc_value < 1000) rc_value = 1000;
 	if (rc_value > 2000) rc_value = 2000;
 	
-	// Mapeia 1000-2000us para aproximadamente 62-187 (5%-15% duty cycle)
-	// ICR1 = 1249, então:
-	// 5% = 62, 10% = 125, 15% = 187
-	// Fórmula: OCR1A = (rc_value - 1000) * (187 - 62) / (2000 - 1000) + 62
-	uint16_t pwm_value = ((uint32_t)(rc_value - 1000) * 125) / 1000 + 52;
+	// Mapeia 1000-2000μs para valores OCR apropriados no Timer1 (50Hz)
+	// ICR1 = 1249, período = 20ms
+	// 1000μs → 1ms = 5% duty cycle = 62 (1000/20000 * 1250 = 62.5)
+	// 2000μs → 2ms = 10% duty cycle = 125 (2000/20000 * 1250 = 125)
+	uint16_t pwm_value = ((uint32_t)(rc_value - 1000) * 62) / 1000 + 62;
 
-	if (pwm_value > 130) {
-		pwm_value = 129;
+	// Garante limites seguros (1-2ms para ESCs)
+	if (pwm_value > 125) {
+		pwm_value = 125;
+	}
+	if (pwm_value < 62) {
+		pwm_value = 62;
 	}
 	
 	return pwm_value;
@@ -296,11 +268,18 @@ uint8_t map_rc_to_pwm_8bit(uint16_t rc_value) {
 	if (rc_value < 1000) rc_value = 1000;
 	if (rc_value > 2000) rc_value = 2000;
 	
-	// Mapeia 1000-2000us para 12-38 (aprox. 5%-15% duty cycle para Timer de 8 bits)
-	uint8_t pwm_value = ((uint32_t)(rc_value - 1000) * 26) / 1000 + 12;
+	// Mapeia 1000-2000μs para valores OCR apropriados no Timer2 (~61Hz)
+	// Timer2 8-bit: TOP = 255, período ≈ 16.384ms
+	// 1000μs → ~6% duty cycle = 15 (1000/16384 * 256 ≈ 15.6)
+	// 2000μs → ~12% duty cycle = 31 (2000/16384 * 256 ≈ 31.2)
+	uint8_t pwm_value = ((uint32_t)(rc_value - 1000) * 16) / 1000 + 15;
 	
-	if (pwm_value > 38) {
-		pwm_value = 38;
+	// Garante limites seguros
+	if (pwm_value > 31) {
+		pwm_value = 31;
+	}
+	if (pwm_value < 15) {
+		pwm_value = 15;
 	}
 	
 	return pwm_value;
