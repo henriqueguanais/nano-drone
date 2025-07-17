@@ -49,6 +49,9 @@ static void vtask_mpu6050(void *pvParameters);
 
 QueueHandle_t xQueueRC;
 
+// Variável para criar timer virtual de 16 bits com Timer0 de 8 bits
+volatile uint16_t timer0_overflow_count = 0;
+
 int main(void)
 {
 	setup();
@@ -64,28 +67,27 @@ int main(void)
 // Função que define os pinos de entrada do receptor RC e configura as interrupções
 void setup()
 {
-	DDRD = 0x00;
-	DDRD |= (1 << PD6); // Define PD6 como saida esc
+	// Configura direção dos pinos
+	DDRD = 0x00;           // Configura PORTD como entrada
 
-	TCCR1A = 0x00; // Normal mode
-	TCCR1B = 0x02; // Prescaler 8 (1 tick = 0.5 us)
-	TIMSK1 = 0x00; // Desabilita inter
-	EICRA = 0x03;  // Aciona a interrupção INT0 na borda de subida
-	EIMSK = 0x01;  // Habilita a interrupção INT0	PD2
+	DDRD &= ~(1 << PD2);   // Garante que PD2 seja entrada (receptor PPM)
+	DDRB |= (1 << PB1);    // Define PB1 (OC1A) como saída para PWM
 
-	// TCCR0A = 0x02; // ctc mode
-	// TCCR0B = 0x02; // prescaler8
-	// TIMSK0 = (1 << OCIE0A);     // Habilita interrupção de comparação
-	// OCR0A = 160;
-
-	// Fast PWM, non-inverting mode (Clear OC0A on Compare Match, set at BOTTOM)
-    TCCR0A = (1 << COM0A1) | (1 << WGM01) | (1 << WGM00);
-    TCCR0B = (1 << CS02); // Prescaler 1
-
-    // Frequência base: 16MHz / 64 = 250kHz
-    // Cada ciclo = 4µs
-    // Para 870µs ativo: 870 / 4 = ~217
-    OCR0A = 10;
+	// Configura Timer1 para Fast PWM (TOP = ICR1), 50 Hz
+	TCCR1A = (1 << COM1A1) | (1 << WGM11); // Fast PWM, modo 14
+	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS12); // Prescaler 256
+	ICR1 = 1249; // 50 Hz (20 ms): (16MHz / (256 * 50Hz)) - 1 = 1249
+	OCR1A = 62;  // Duty cycle inicial (~5%): 1249 * 0.05 = 62
+	TIMSK1 = 0x00; // Desabilita interrupções do Timer1
+	
+	// Configura Timer0 para contagem de tempo (PPM timing)
+	TCCR0A = 0x00; // Normal mode
+	TCCR0B = 0x02; // Prescaler 8 (1 tick = 0.5 us)
+	TIMSK0 = (1 << TOIE0); // Habilita interrupção de overflow do Timer0
+	
+	// Configura INT0 (PD2) para borda de subida
+	EICRA |= (1 << ISC01) | (1 << ISC00); // INT0 na borda de subida
+	EIMSK |= (1 << INT0);                 // Habilita INT0
 
 
 	sei();
@@ -159,64 +161,75 @@ static void vtask_rc(void *pvParameters)
 		{
 			// USART_send_string("CH1: ");
 			// USART_send_int(rc_local_values[0]);
-			// USART_send_string("|CH2: ");
+			// USART_send_string(" | CH2: ");
 			// USART_send_int(rc_local_values[1]);
-			// USART_send_string("|CH3: ");
-			// USART_send_int(rc_local_values[2]);
-			// USART_send_string("|CH4: ");
+			USART_send_string(" | CH3: ");
+			USART_send_int(rc_local_values[2]);
+			// USART_send_string(" | CH4: ");
 			// USART_send_int(rc_local_values[3]);
-			// USART_send_string("|CH5: ");
+			// USART_send_string(" | CH5: ");
 			// USART_send_int(rc_local_values[4]);
-			// USART_send_string("|CH6: ");
+			// USART_send_string(" | CH6: ");
 			// USART_send_int(rc_local_values[5]);
-			// USART_send_string("\r\n");
+			USART_send_string("\r\n");
 		}
 
-		vTaskDelay(pdMS_TO_TICKS(1000));
+		vTaskDelay(pdMS_TO_TICKS(100));
 	}
 }
 
-// Interrupção externa INT0 para capturar o sinal PPM do receptor RC
+// ISR do overflow do Timer0 para criar um timer virtual de 16 bits
+ISR(TIMER0_OVF_vect)
+{
+	timer0_overflow_count++;
+}
+
+// Função para obter o tempo atual em microssegundos (resolução de 0.5 us)
+uint32_t get_timer0_microseconds(void)
+{
+	uint8_t tcnt0_val;
+	uint16_t overflow_count;
+	
+	// Leitura atômica para evitar problemas de concorrência
+	cli();
+	tcnt0_val = TCNT0;
+	overflow_count = timer0_overflow_count;
+	sei();
+	
+	// Calcula o tempo total em ticks (cada tick = 0.5 us)
+	uint32_t total_ticks = ((uint32_t)overflow_count << 8) + tcnt0_val;
+	
+	// Converte para microssegundos (divide por 2, pois cada tick = 0.5 us)
+	return total_ticks >> 1;
+}
+
+// Interrupção externa INT0 para capturar o sinal PPM do receptor RC no PD2
 ISR(INT0_vect)
 {
-	static uint16_t last_time = 0;
+	static uint32_t last_time = 0;
 	static uint8_t current_channel = 0;
 	static uint16_t rc_values[RC_CHANNELS] = {0};
 
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-	uint16_t current_time = TCNT1;					 // Captura o tempo atual do timer
-	uint16_t pulse_width = current_time - last_time; // Calcula a largura do pulso
-	last_time = current_time;						 // Atualiza o último tempo
+	uint32_t current_time = get_timer0_microseconds(); // Obtém tempo atual em microssegundos
+	uint32_t pulse_width = current_time - last_time;   // Calcula a largura do pulso
+	last_time = current_time;                          // Atualiza o último tempo
 
-	uint16_t pulse_width_us = pulse_width * 0.5; // Converte o tempo do timer para us
-
-	if (pulse_width_us > PPM_SYNC_TIME)
+	// Verifica se é um pulso de sincronização (> 3ms)
+	if (pulse_width > PPM_SYNC_TIME)
 	{
-		xQueueSendFromISR(xQueueRC, &rc_values, &xHigherPriorityTaskWoken); // envia para fila apos ler todos os canais
-		current_channel = 0;												// Reseta para o canal 0, se for pulso de sincronização
+		// Envia os valores dos canais para a fila apenas se temos dados válidos
+		if (current_channel > 0) {
+			xQueueSendFromISR(xQueueRC, &rc_values, &xHigherPriorityTaskWoken);
+		}
+		current_channel = 0; // Reseta para o canal 0
 	}
-	else if (current_channel < RC_CHANNELS)
+	else if (current_channel < RC_CHANNELS && pulse_width > 500 && pulse_width < 2500)
 	{
-		rc_values[current_channel] = pulse_width_us;
+		// Filtra apenas pulsos válidos (entre 0.5ms e 2.5ms)
+		rc_values[current_channel] = (uint16_t)pulse_width;
 		current_channel++;
 	}
 }
-
-// ISR(TIMER0_COMPA_vect) {
-// 	// static uint8_t count = 0;
-// 	// count++;
-// 	// if (count >= 100) {
-// 	// 	PORTD |= (1 << PD6);
-// 	// }
-// 	// if (count >= 200) {
-// 	// 	PORTD &= ~(1 << PD6);
-// 	// }
-
-// 	// if (count >= 2000) {
-// 	// 	count = 0;
-// 	// }
-
-
-// }
 
