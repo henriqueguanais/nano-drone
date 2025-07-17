@@ -72,13 +72,14 @@ void setup()
 	DDRD = 0x00;           // Configura PORTD como entrada
 
 	DDRD &= ~(1 << PD2);   // Garante que PD2 seja entrada (receptor PPM)
-	DDRB |= (1 << PB1);    // Define PB1 (OC1A) como saída para PWM
+	DDRB |= (1 << PB1) | (1 << PB2); // Define PB1 (OC1A) e PB2 (OC1B) como saída para PWM
 
 	// Configura Timer1 para Fast PWM (TOP = ICR1), 50 Hz
-	TCCR1A = (1 << COM1A1) | (1 << WGM11); // Fast PWM, modo 14
+	TCCR1A = (1 << COM1A1) | (1 << COM1B1) | (1 << WGM11); // Fast PWM, modo 14, habilita OC1A e OC1B
 	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS12); // Prescaler 256
 	ICR1 = 1249; // 50 Hz 
-	OCR1A = 55;  // 900 us
+	OCR1A = 55;  // 900 us - Motor 1 (PB1)
+	OCR1B = 55;  // 900 us - Motor 2 (PB2)
 	TIMSK1 = 0x00; // Desabilita interrupções do Timer1
 	
 	// Configura Timer0 para contagem de tempo (PPM timing)
@@ -160,10 +161,16 @@ static void vtask_rc(void *pvParameters)
 
 		if (xStatus == pdPASS)
 		{
-			// Aplica o valor do canal 3 (throttle) ao PWM
+			// Aplica o valor do canal 3 (throttle) ao Motor 1 (PB1)
 			uint16_t throttle_value = rc_local_values[2];
 			if (throttle_value >= 990 && throttle_value <= 2900) {
 				OCR1A = map_rc_to_pwm(throttle_value);
+			}
+			
+			// Aplica o valor do canal 2 ao Motor 2 (PB2)
+			uint16_t motor2_value = rc_local_values[1];
+			if (motor2_value >= 990 && motor2_value <= 2900) {
+				OCR1B = map_rc_to_pwm(motor2_value);
 			}
 			
 			// Exibe todos os canais via USART
@@ -175,8 +182,10 @@ static void vtask_rc(void *pvParameters)
 			USART_send_int(rc_local_values[2]);
 			USART_send_string(" | CH4: ");
 			USART_send_int(rc_local_values[3]);
-			USART_send_string(" | PWM: ");
+			USART_send_string(" | M1: ");
 			USART_send_int(OCR1A);
+			USART_send_string(" | M2: ");
+			USART_send_int(OCR1B);
 			USART_send_string("\r\n");
 		}
 
