@@ -17,6 +17,7 @@ void setup(void);
 static void vtask_rc(void *pvParameters);
 static void vtask_mpu6050(void *pvParameters);
 uint16_t map_rc_to_pwm(uint16_t rc_value);
+uint8_t map_rc_to_pwm_8bit(uint16_t rc_value);
 uint32_t get_timer0_microseconds(void);
 
 const int16_t atan_lookup[51] = {
@@ -53,6 +54,12 @@ QueueHandle_t xQueueRC;
 // Variável para criar timer virtual de 16 bits com Timer0 de 8 bits
 volatile uint16_t timer0_overflow_count = 0;
 
+// Variáveis para PWM por software (motores 3 e 4)
+volatile uint16_t pwm_cycle_count = 0;
+volatile uint16_t motor3_pwm_value = 55;  // Valor inicial (900us)
+volatile uint16_t motor4_pwm_value = 55;  // Valor inicial (900us)
+volatile uint8_t pwm_state = 0;           // Estado atual do ciclo PWM
+
 int main(void)
 {
 	setup();
@@ -72,6 +79,7 @@ void setup()
 	DDRD = 0x00;           // Configura PORTD como entrada
 
 	DDRD &= ~(1 << PD2);   // Garante que PD2 seja entrada (receptor PPM)
+	DDRD |= (1 << PD4) | (1 << PD5); // Define PD4 e PD5 como saída (motores 3 e 4)
 	DDRB |= (1 << PB1) | (1 << PB2); // Define PB1 (OC1A) e PB2 (OC1B) como saída para PWM
 
 	// Configura Timer1 para Fast PWM (TOP = ICR1), 50 Hz
@@ -80,7 +88,7 @@ void setup()
 	ICR1 = 1249; // 50 Hz 
 	OCR1A = 55;  // 900 us - Motor 1 (PB1)
 	OCR1B = 55;  // 900 us - Motor 2 (PB2)
-	TIMSK1 = 0x00; // Desabilita interrupções do Timer1
+	TIMSK1 = (1 << TOIE1); // Habilita interrupção de overflow do Timer1 para PWM software
 	
 	// Configura Timer0 para contagem de tempo (PPM timing)
 	TCCR0A = 0x00; // Normal mode
@@ -173,6 +181,22 @@ static void vtask_rc(void *pvParameters)
 				OCR1B = map_rc_to_pwm(motor2_value);
 			}
 			
+			// Aplica o valor do canal 1 ao Motor 3 (PD4) - PWM por software
+			uint16_t motor3_value = rc_local_values[0];
+			if (motor3_value >= 990 && motor3_value <= 2900) {
+				cli();
+				motor3_pwm_value = map_rc_to_pwm(motor3_value);
+				sei();
+			}
+			
+			// Aplica o valor do canal 4 ao Motor 4 (PD5) - PWM por software
+			uint16_t motor4_value = rc_local_values[3];
+			if (motor4_value >= 990 && motor4_value <= 2900) {
+				cli();
+				motor4_pwm_value = map_rc_to_pwm(motor4_value);
+				sei();
+			}
+			
 			// Exibe todos os canais via USART
 			USART_send_string("CH1: ");
 			USART_send_int(rc_local_values[0]);
@@ -186,6 +210,10 @@ static void vtask_rc(void *pvParameters)
 			USART_send_int(OCR1A);
 			USART_send_string(" | M2: ");
 			USART_send_int(OCR1B);
+			USART_send_string(" | M3: ");
+			USART_send_int(motor3_pwm_value);
+			USART_send_string(" | M4: ");
+			USART_send_int(motor4_pwm_value);
 			USART_send_string("\r\n");
 		}
 
@@ -197,6 +225,31 @@ static void vtask_rc(void *pvParameters)
 ISR(TIMER0_OVF_vect)
 {
 	timer0_overflow_count++;
+}
+
+// ISR do overflow do Timer1 para PWM por software (motores 3 e 4)
+ISR(TIMER1_OVF_vect)
+{
+	pwm_cycle_count++;
+	
+	// A cada overflow do Timer1 (~50Hz), reseta o ciclo PWM
+	if (pwm_cycle_count >= 1250) { // ICR1 = 1249, então overflow a cada ~20ms
+		pwm_cycle_count = 0;
+		pwm_state = 0;
+		
+		// Inicia pulso alto nos dois motores
+		PORTD |= (1 << PD4) | (1 << PD5);
+	}
+	
+	// Controla o duty cycle do Motor 3 (PD4)
+	if (pwm_cycle_count >= motor3_pwm_value && (PORTD & (1 << PD4))) {
+		PORTD &= ~(1 << PD4); // Desliga Motor 3
+	}
+	
+	// Controla o duty cycle do Motor 4 (PD5)
+	if (pwm_cycle_count >= motor4_pwm_value && (PORTD & (1 << PD5))) {
+		PORTD &= ~(1 << PD5); // Desliga Motor 4
+	}
 }
 
 // Função para obter o tempo atual em microssegundos (resolução de 0.5 us)
@@ -232,6 +285,22 @@ uint16_t map_rc_to_pwm(uint16_t rc_value) {
 
 	if (pwm_value > 130) {
 		pwm_value = 129;
+	}
+	
+	return pwm_value;
+}
+
+// Função para mapear valores RC para PWM de 8 bits (Timer2)
+uint8_t map_rc_to_pwm_8bit(uint16_t rc_value) {
+	// Limita os valores de entrada
+	if (rc_value < 1000) rc_value = 1000;
+	if (rc_value > 2000) rc_value = 2000;
+	
+	// Mapeia 1000-2000us para 12-38 (aprox. 5%-15% duty cycle para Timer de 8 bits)
+	uint8_t pwm_value = ((uint32_t)(rc_value - 1000) * 26) / 1000 + 12;
+	
+	if (pwm_value > 38) {
+		pwm_value = 38;
 	}
 	
 	return pwm_value;
