@@ -162,7 +162,7 @@ static void vtask_rc(void *pvParameters)
 		{
 			// Aplica o valor do canal 3 (throttle) ao PWM
 			uint16_t throttle_value = rc_local_values[2];
-			if (throttle_value >= 1000 && throttle_value <= 2000) {
+			if (throttle_value >= 990 && throttle_value <= 2900) {
 				OCR1A = map_rc_to_pwm(throttle_value);
 			}
 			
@@ -220,6 +220,10 @@ uint16_t map_rc_to_pwm(uint16_t rc_value) {
 	// 5% = 62, 10% = 125, 15% = 187
 	// Fórmula: OCR1A = (rc_value - 1000) * (187 - 62) / (2000 - 1000) + 62
 	uint16_t pwm_value = ((uint32_t)(rc_value - 1000) * 125) / 1000 + 52;
+
+	if (pwm_value > 130) {
+		pwm_value = 129;
+	}
 	
 	return pwm_value;
 }
