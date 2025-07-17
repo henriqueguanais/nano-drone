@@ -1,6 +1,7 @@
 #define F_CPU 16000000UL
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include <stdlib.h>  // Para abs()
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -121,16 +122,12 @@ static void vtask_mpu6050(void *pvParameters)
 		int16_t roll_tenths = fast_atan2_degrees(mpu_data.accel_y, mpu_data.accel_z);
 		int16_t pitch_tenths = fast_atan2_degrees(-mpu_data.accel_x, mpu_data.accel_z);
 
-		// Envia dados do MPU6050 pela USART
-		USART_send_string("MPU6050: ");
-		USART_send_string("AX:"); USART_send_int(mpu_data.accel_x);
-		USART_send_string(" AY:"); USART_send_int(mpu_data.accel_y);
-		USART_send_string(" AZ:"); USART_send_int(mpu_data.accel_z);
-		USART_send_string(" | GX:"); USART_send_int(mpu_data.gyro_x);
-		USART_send_string(" GY:"); USART_send_int(mpu_data.gyro_y);
-		USART_send_string(" GZ:"); USART_send_int(mpu_data.gyro_z);
-		USART_send_string(" | Roll:"); USART_send_int(roll_tenths);
-		USART_send_string(" Pitch:"); USART_send_int(pitch_tenths);
+		// Envia dados do MPU6050 pela USART (apenas aceleração e ângulos)
+		USART_send_string("[MPU6050] ");
+		USART_send_string(" | Roll (°):"); USART_send_int(roll_tenths / 10);
+		USART_send_string("."); USART_send_int(abs(roll_tenths % 10));
+		USART_send_string(" Pitch (°):"); USART_send_int(pitch_tenths / 10);
+		USART_send_string("."); USART_send_int(abs(pitch_tenths % 10));
 		USART_send_string("\r\n");
 
 		// Delay de 1 segundo entre leituras para melhor visualização
@@ -154,15 +151,15 @@ static void vtask_rc(void *pvParameters)
 			// USART_send_int(rc_local_values[0]);
 			// USART_send_string("|CH2: ");
 			// USART_send_int(rc_local_values[1]);
-			USART_send_string("|CH3: ");
-			USART_send_int(rc_local_values[2]);
+			// USART_send_string("|CH3: ");
+			// USART_send_int(rc_local_values[2]);
 			// USART_send_string("|CH4: ");
 			// USART_send_int(rc_local_values[3]);
 			// USART_send_string("|CH5: ");
 			// USART_send_int(rc_local_values[4]);
 			// USART_send_string("|CH6: ");
 			// USART_send_int(rc_local_values[5]);
-			USART_send_string("\r\n");
+			// USART_send_string("\r\n");
 		}
 
 		vTaskDelay(pdMS_TO_TICKS(100));
