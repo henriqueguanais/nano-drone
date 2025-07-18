@@ -13,6 +13,11 @@
 #define RC_CHANNELS 6
 #define PPM_SYNC_TIME 3000 // Tempo de sincronização do PPM em microssegundos
 
+#define T1DUTY_MIN 53
+#define T1DUTY_MAX 125 // 2000μs = 2ms = 10% duty cycle (125/1250 * 100)
+#define T2DUTY_MIN 15
+#define T2DUTY_MAX 31 // 2000μs = 2ms = 12% duty cycle (31/256 * 100)
+
 void setup(void);
 static void vtask_rc(void *pvParameters);
 static void vtask_mpu6050(void *pvParameters);
@@ -247,16 +252,16 @@ uint16_t map_rc_to_pwm(uint16_t rc_value) {
 	
 	// Mapeia 1000-2000μs para valores OCR apropriados no Timer1 (50Hz)
 	// ICR1 = 1249, período = 20ms
-	// 1000μs → 1ms = 5% duty cycle = 62 (1000/20000 * 1250 = 62.5)
-	// 2000μs → 2ms = 10% duty cycle = 125 (2000/20000 * 1250 = 125)
-	uint16_t pwm_value = ((uint32_t)(rc_value - 1000) * 62) / 1000 + 62;
+	// 1000μs → 1ms = 5% duty cycle = T1DUTY_MIN (1000/20000 * 1250 = T1DUTY_MIN)
+	// 2000μs → 2ms = 10% duty cycle = T1DUTY_MAX (2000/20000 * 1250 = T1DUTY_MAX)
+	uint16_t pwm_value = ((uint32_t)(rc_value - 1000) * T1DUTY_MIN) / 1000 + T1DUTY_MIN;
 
 	// Garante limites seguros (1-2ms para ESCs)
-	if (pwm_value > 125) {
-		pwm_value = 125;
+	if (pwm_value > T1DUTY_MAX) {
+		pwm_value = T1DUTY_MAX;
 	}
-	if (pwm_value < 62) {
-		pwm_value = 62;
+	if (pwm_value < T1DUTY_MIN) {
+		pwm_value = T1DUTY_MIN;
 	}
 	
 	return pwm_value;
@@ -270,16 +275,16 @@ uint8_t map_rc_to_pwm_8bit(uint16_t rc_value) {
 	
 	// Mapeia 1000-2000μs para valores OCR apropriados no Timer2 (~61Hz)
 	// Timer2 8-bit: TOP = 255, período ≈ 16.384ms
-	// 1000μs → ~6% duty cycle = 15 (1000/16384 * 256 ≈ 15.6)
-	// 2000μs → ~12% duty cycle = 31 (2000/16384 * 256 ≈ 31.2)
-	uint8_t pwm_value = ((uint32_t)(rc_value - 1000) * 16) / 1000 + 15;
-	
+	// 1000μs → ~6% duty cycle = T2DUTY_MIN (1000/16384 * 256 ≈ T2DUTY_MIN)
+	// 2000μs → ~12% duty cycle = T2DUTY_MAX (2000/16384 * 256 ≈ T2DUTY_MAX)
+	uint8_t pwm_value = ((uint32_t)(rc_value - 1000) * 16) / 1000 + T2DUTY_MIN;
+
 	// Garante limites seguros
-	if (pwm_value > 31) {
-		pwm_value = 31;
+	if (pwm_value > T2DUTY_MAX) {
+		pwm_value = T2DUTY_MAX;
 	}
-	if (pwm_value < 15) {
-		pwm_value = 15;
+	if (pwm_value < T2DUTY_MIN) {
+		pwm_value = T2DUTY_MIN;
 	}
 	
 	return pwm_value;
