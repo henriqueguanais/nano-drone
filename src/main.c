@@ -26,58 +26,10 @@ static void vtask_mpu6050(void *pvParameters);
 uint16_t map_rc_to_pwm(uint16_t rc_value);
 uint8_t map_rc_to_pwm_8bit(uint16_t rc_value);
 uint32_t get_timer0_microseconds(void);
-
-const int16_t atan_lookup[51] = {
-	0, 57, 114, 171, 228, 284, 340, 395, 449, 503,				// 0.0-0.9
-	557, 610, 662, 714, 765, 816, 866, 916, 965, 1013,			// 1.0-1.9
-	1061, 1107, 1154, 1199, 1244, 1288, 1332, 1376, 1419, 1462, // 2.0-2.9
-	1504, 1546, 1588, 1629, 1670, 1711, 1751, 1791, 1831, 1871, // 3.0-3.9
-	1910, 1949, 1988, 2027, 2065, 2103, 2141, 2179, 2217, 2254, // 4.0-4.9
-	2291														// 5.0
-};
-
-int16_t fast_atan2_degrees(int16_t y, int16_t z)
-{
-	if (z == 0)
-		return (y > 0) ? 900 : -900; // ±90°
-
-	// Calcula a razão absoluta
-	int32_t ratio_abs = (y >= 0 ? y : -y) * 10L;
-	int32_t z_abs = (z >= 0 ? z : -z);
-	ratio_abs = ratio_abs / z_abs;
-
-	// Limita o índice da tabela
-	if (ratio_abs > 50)
-		ratio_abs = 50;
-
-	int16_t angle = atan_lookup[ratio_abs];
-
-	// Ajusta o sinal baseado nos quadrantes
-	if (z < 0)
-		angle = 1800 - angle; // 180° - angle
-	if (y < 0)
-		angle = -angle;
-
-	return angle; // Retorna em décimos de grau
-}
-
 QueueHandle_t xQueueRC;
 
 // Variável para criar timer virtual de 16 bits com Timer0 de 8 bits
 volatile uint16_t timer0_overflow_count = 0;
-
-int main(void)
-{
-	setup();
-
-	xQueueRC = xQueueCreate(1, sizeof(uint16_t) * RC_CHANNELS);
-
-	xTaskCreate(vtask_rc, (const char *)"serial", 128, NULL, 1, NULL);
-	xTaskCreate(vtask_mpu6050, (const char *)"mpu6050", 192, NULL, 1, NULL);
-	vTaskStartScheduler();
-	for (;;)
-		;
-}
 
 // Função que define os pinos de entrada do receptor RC e configura as interrupções
 void setup()
@@ -118,6 +70,49 @@ void setup()
 
 	USART_init(MYUBRR);
 	mpu6050_init();
+}
+
+int main(void)
+{
+	setup();
+
+	xQueueRC = xQueueCreate(1, sizeof(uint16_t) * RC_CHANNELS);
+
+	xTaskCreate(vtask_rc, (const char *)"serial", 128, NULL, 1, NULL);
+	xTaskCreate(vtask_mpu6050, (const char *)"mpu6050", 192, NULL, 1, NULL);
+	vTaskStartScheduler();
+	for (;;)
+		;
+}
+
+const int16_t atan_lookup[51] = {
+	0, 57, 114, 171, 228, 284, 340, 395, 449, 503,				// 0.0-0.9
+	557, 610, 662, 714, 765, 816, 866, 916, 965, 1013,			// 1.0-1.9
+	1061, 1107, 1154, 1199, 1244, 1288, 1332, 1376, 1419, 1462, // 2.0-2.9
+	1504, 1546, 1588, 1629, 1670, 1711, 1751, 1791, 1831, 1871, // 3.0-3.9
+	1910, 1949, 1988, 2027, 2065, 2103, 2141, 2179, 2217, 2254, // 4.0-4.9
+	2291														// 5.0
+};
+
+int16_t fast_atan2_degrees(int16_t y, int16_t z)
+{
+	if (z == 0)
+		return (y > 0) ? 900 : -900; // ±90°
+
+	// Calcula a razão absoluta
+	int32_t ratio_abs = (y >= 0 ? y : -y) * 10L;
+	int32_t z_abs = (z >= 0 ? z : -z);
+	ratio_abs = ratio_abs / z_abs;
+
+	int16_t angle = atan_lookup[ratio_abs];
+
+	// Ajusta o sinal baseado nos quadrantes
+	if (z < 0)
+		angle = 1800 - angle; // 180° - angle
+	if (y < 0)
+		angle = -angle;
+
+	return angle; // Retorna em décimos de grau
 }
 
 static void vtask_mpu6050(void *pvParameters)
@@ -187,51 +182,47 @@ static void vtask_rc(void *pvParameters)
 
 		if (xStatus == pdPASS)
 		{
-			// Aplica o valor do canal 3 (throttle) a todos os 4 motores
-			uint16_t throttle_value = rc_local_values[2];
-			if (rc_local_values[4] > 1500) {
-				// Se o canal 5 (auxiliar) estiver acima de 1500, aplica o throttle
-				throttle_value = rc_local_values[2]; // Usa o canal 3 como throttle
-			} else {
-				throttle_value = 990; // Se não, desliga os motores
+			// Controle dos eixos PITCH (CH1) e ROLL (CH2)
+			uint16_t throttle = rc_local_values[2]; // CH3
+			int16_t pitch = rc_local_values[0] - 1500; // CH1 (centro em 1500)
+			int16_t roll  = rc_local_values[1] - 1500; // CH2 (centro em 1500)
+			if (rc_local_values[4] <= 1500) {
+				throttle = 990; // Se canal auxiliar desligado, desliga motores
 			}
-			if (throttle_value >= 990 && throttle_value <= 2900)
+
+			if (throttle >= 990 && throttle <= 2900)
 			{
-				uint16_t pwm_value = map_rc_to_pwm(throttle_value);
-				uint8_t pwm_value_8bit = map_rc_to_pwm_8bit(throttle_value);
+				// Aplica correções de pitch e roll nos motores
+				// Motor 1 (PB1): +pitch -roll
+				// Motor 2 (PB2): +pitch +roll
+				// Motor 3 (PD3): -pitch +roll
+				// Motor 4 (PB3): -pitch -roll
+				int16_t m1 = throttle + pitch - roll;
+				int16_t m2 = throttle + pitch + roll;
+				int16_t m3 = throttle - pitch + roll;
+				int16_t m4 = throttle - pitch - roll;
 
-				USART_send_string("Motor 1 e 2 (PB1/PB2) - Timer1 OC1AB: ");
-				USART_send_int(pwm_value);
+				// Mapeia para PWM seguro
+				uint16_t pwm_m1 = map_rc_to_pwm(m1);
+				uint16_t pwm_m2 = map_rc_to_pwm(m2);
+				uint8_t  pwm_m3 = map_rc_to_pwm_8bit(m3);
+				uint8_t  pwm_m4 = map_rc_to_pwm_8bit(m4);
+
+				// Aplica PWM nos motores
+				OCR1A = pwm_m1; // Motor 1 (PB1)
+				OCR1B = pwm_m2; // Motor 2 (PB2)
+				OCR2B = pwm_m3; // Motor 3 (PD3)
+				OCR2A = pwm_m4; // Motor 4 (PB3)
+
+				// Debug via USART
+				USART_send_string("M1:"); USART_send_int(pwm_m1);
+				USART_send_string(" M2:"); USART_send_int(pwm_m2);
+				USART_send_string(" M3:"); USART_send_int(pwm_m3);
+				USART_send_string(" M4:"); USART_send_int(pwm_m4);
 				USART_send_string("\r\n");
-
-				uint8_t m1a2_fineTunning = pwm_value + 1;
-
-				// Motor 1 (PB1) - Timer1 OC1A
-				OCR1A = m1a2_fineTunning;
-
-				// Motor 2 (PB2) - Timer1 OC1B
-				OCR1B = m1a2_fineTunning;
-
-				// Motor 3 (PD3) - Timer2 OC2B
-				OCR2B = pwm_value_8bit;
-
-				// Motor 4 (PB3) - Timer2 OC2A
-				uint8_t m4_fineTunning = pwm_value_8bit + 6;
-				if (m4_fineTunning > 34)
-				{
-					uint16_t last_throttle = 0;
-					uint16_t current_throttle = rc_local_values[0];
-					if (abs((int)current_throttle - (int)last_throttle) > THROTTLE_THRESHOLD)
-					{
-						last_throttle = current_throttle;
-					}
-					vTaskDelay(pdMS_TO_TICKS(20)); // Ajuste o tempo conforme necessário
-					m4_fineTunning = 34;		   // Limita o valor máximo para evitar overflow
-				}
-				OCR2A = m4_fineTunning;
 			}
 
-			// Exibe todos os canais via USART
+			// Exibe todos os canais via USART (debug)
 			USART_send_string("CH1: ");
 			USART_send_int(rc_local_values[0]);
 			USART_send_string(" | CH2: ");
