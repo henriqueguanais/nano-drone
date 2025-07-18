@@ -181,12 +181,18 @@ static void vtask_rc(void *pvParameters)
 			if (throttle_value >= 990 && throttle_value <= 2900) {
 				uint16_t pwm_value = map_rc_to_pwm(throttle_value);
 				uint8_t pwm_value_8bit = map_rc_to_pwm_8bit(throttle_value);
+
+				USART_send_string("Motor 1 e 2 (PB1/PB2) - Timer1 OC1AB: ");
+				USART_send_int(pwm_value);
+				USART_send_string("\r\n");
+
+				uint8_t m1a2_fineTunning = pwm_value+1;
 				
 				// Motor 1 (PB1) - Timer1 OC1A
-				OCR1A = pwm_value;
+				OCR1A = m1a2_fineTunning;
 				
 				// Motor 2 (PB2) - Timer1 OC1B
-				OCR1B = pwm_value;
+				OCR1B = m1a2_fineTunning;
 
 				// Motor 3 (PD3) - Timer2 OC2B
 				OCR2B = pwm_value_8bit;
