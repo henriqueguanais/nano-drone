@@ -208,17 +208,27 @@ static void vtask_rc(void *pvParameters)
 				uint8_t  pwm_m3 = map_rc_to_pwm_8bit(m3);
 				uint8_t  pwm_m4 = map_rc_to_pwm_8bit(m4);
 
-				// Aplica PWM nos motores
-				OCR1A = pwm_m1; // Motor 1 (PB1)
-				OCR1B = pwm_m2; // Motor 2 (PB2)
-				OCR2B = pwm_m3; // Motor 3 (PD3)
-				OCR2A = pwm_m4; // Motor 4 (PB3)
+				// Fine tuning para compensar diferenças dos motores
+				uint16_t m1_fineTuning = pwm_m1 + 1; // Motor 1 ajuste
+				uint16_t m2_fineTuning = pwm_m2 + 1; // Motor 2 ajuste
+				
+				uint8_t m4_fineTuning = pwm_m4 + 6; // Motor 4 ajuste
+				if (m4_fineTuning > 34)
+				{
+					m4_fineTuning = 34; // Limita o valor máximo para evitar overflow
+				}
+
+				// Aplica PWM nos motores com fine tuning
+				OCR1A = m1_fineTuning; // Motor 1 (PB1)
+				OCR1B = m2_fineTuning; // Motor 2 (PB2)
+				OCR2B = pwm_m3;        // Motor 3 (PD3) - sem ajuste
+				OCR2A = m4_fineTuning; // Motor 4 (PB3)
 
 				// Debug via USART
-				USART_send_string("M1:"); USART_send_int(pwm_m1);
-				USART_send_string(" M2:"); USART_send_int(pwm_m2);
+				USART_send_string("M1:"); USART_send_int(m1_fineTuning);
+				USART_send_string(" M2:"); USART_send_int(m2_fineTuning);
 				USART_send_string(" M3:"); USART_send_int(pwm_m3);
-				USART_send_string(" M4:"); USART_send_int(pwm_m4);
+				USART_send_string(" M4:"); USART_send_int(m4_fineTuning);
 				USART_send_string("\r\n");
 			}
 
