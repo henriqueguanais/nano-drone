@@ -3,7 +3,7 @@
 # Configurações
 MCU     = atmega328p
 F_CPU   = 16000000UL
-PORT    = COM6   # Altere para a porta correta do seu sistema
+PORT    = COM10   # Altere para a porta correta do seu sistema
 BAUD    = 115200
 PROGRAMMER = arduino
 
