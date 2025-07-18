@@ -13,9 +13,9 @@
 #define RC_CHANNELS 6
 #define PPM_SYNC_TIME 3000 // Tempo de sincronização do PPM em microssegundos
 
-#define T1DUTY_MIN 53
+#define T1DUTY_MIN 50
 #define T1DUTY_MAX 125 // 2000μs = 2ms = 10% duty cycle (125/1250 * 100)
-#define T2DUTY_MIN 15
+#define T2DUTY_MIN 16
 #define T2DUTY_MAX 31 // 2000μs = 2ms = 12% duty cycle (31/256 * 100)
 
 void setup(void);
@@ -187,12 +187,18 @@ static void vtask_rc(void *pvParameters)
 				
 				// Motor 2 (PB2) - Timer1 OC1B
 				OCR1B = pwm_value;
-				
-				// Motor 3 (PB3) - Timer2 OC2A
-				OCR2A = pwm_value_8bit;
-				
-				// Motor 4 (PD3) - Timer2 OC2B
+
+				// Motor 3 (PD3) - Timer2 OC2B
 				OCR2B = pwm_value_8bit;
+				
+				// Motor 4 (PB3) - Timer2 OC2A
+				uint8_t m4_fineTunning = pwm_value_8bit+6;
+				if (m4_fineTunning > 34) {
+					m4_fineTunning = 34; // Limita o valor máximo para evitar overflow
+				}
+				OCR2A = m4_fineTunning;
+
+				
 			}
 			
 			// Exibe todos os canais via USART
