@@ -240,14 +240,8 @@ static void vtask_rc(void *pvParameters)
 			USART_send_int(rc_local_values[2]);
 			USART_send_string(" | CH4: ");
 			USART_send_int(rc_local_values[3]);
-			USART_send_string(" | M1: ");
-			USART_send_int(OCR1A);
-			USART_send_string(" | M2: ");
-			USART_send_int(OCR1B);
-			USART_send_string(" | M3: ");
-			USART_send_int(OCR2A);
-			USART_send_string(" | M4: ");
-			USART_send_int(OCR2B);
+			USART_send_string(" | CH5: ");
+			USART_send_int(rc_local_values[4]);
 			USART_send_string("\r\n");
 		}
 
