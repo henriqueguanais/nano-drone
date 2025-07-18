@@ -18,6 +18,9 @@
 #define T2DUTY_MIN 16
 #define T2DUTY_MAX 31 // 2000μs = 2ms = 12% duty cycle (31/256 * 100)
 
+#define THROTTLE_THRESHOLD 15 // Valor mínimo para considerar mudança (ajuste conforme necessário)
+
+
 void setup(void);
 static void vtask_rc(void *pvParameters);
 static void vtask_mpu6050(void *pvParameters);
@@ -200,6 +203,12 @@ static void vtask_rc(void *pvParameters)
 				// Motor 4 (PB3) - Timer2 OC2A
 				uint8_t m4_fineTunning = pwm_value_8bit+6;
 				if (m4_fineTunning > 34) {
+		uint16_t last_throttle = 0;
+		uint16_t current_throttle = rc_local_values[0];
+		if (abs((int)current_throttle - (int)last_throttle) > THROTTLE_THRESHOLD) {
+			last_throttle = current_throttle;
+		}
+		vTaskDelay(pdMS_TO_TICKS(20)); // Ajuste o tempo conforme necessário
 					m4_fineTunning = 34; // Limita o valor máximo para evitar overflow
 				}
 				OCR2A = m4_fineTunning;
