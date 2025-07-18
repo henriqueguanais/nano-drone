@@ -20,6 +20,16 @@
 
 #define THROTTLE_THRESHOLD 15 // Valor mínimo para considerar mudança (ajuste conforme necessário)
 
+// Constantes para estabilização PID
+#define KP_ROLL 1.0f   // Ganho proporcional para roll
+#define KI_ROLL 0.1f   // Ganho integral para roll  
+#define KD_ROLL 0.05f  // Ganho derivativo para roll
+#define KP_PITCH 1.0f  // Ganho proporcional para pitch
+#define KI_PITCH 0.1f  // Ganho integral para pitch
+#define KD_PITCH 0.05f // Ganho derivativo para pitch
+
+#define MAX_ANGLE_CORRECTION 200 // Máxima correção em unidades PWM
+
 void setup(void);
 static void vtask_rc(void *pvParameters);
 static void vtask_mpu6050(void *pvParameters);
@@ -27,6 +37,20 @@ uint16_t map_rc_to_pwm(uint16_t rc_value);
 uint8_t map_rc_to_pwm_8bit(uint16_t rc_value);
 uint32_t get_timer0_microseconds(void);
 QueueHandle_t xQueueRC;
+
+// Variáveis globais para estabilização
+volatile int16_t current_roll_angle = 0;   // Ângulo atual de roll em décimos de grau
+volatile int16_t current_pitch_angle = 0;  // Ângulo atual de pitch em décimos de grau
+volatile int16_t roll_correction = 0;      // Correção PID para roll
+volatile int16_t pitch_correction = 0;     // Correção PID para pitch
+
+// Variáveis PID para roll
+static int32_t roll_integral = 0;
+static int16_t roll_last_error = 0;
+
+// Variáveis PID para pitch  
+static int32_t pitch_integral = 0;
+static int16_t pitch_last_error = 0;
 
 // Variável para criar timer virtual de 16 bits com Timer0 de 8 bits
 volatile uint16_t timer0_overflow_count = 0;
@@ -115,6 +139,36 @@ int16_t fast_atan2_degrees(int16_t y, int16_t z)
 	return angle; // Retorna em décimos de grau
 }
 
+// Função para calcular controle PID para estabilização
+int16_t calculate_pid(int16_t setpoint, int16_t current_value, int32_t *integral, int16_t *last_error, float kp, float ki, float kd)
+{
+	// Calcula o erro (setpoint - valor atual)
+	int16_t error = setpoint - current_value;
+	
+	// Termo proporcional
+	int32_t proportional = (int32_t)(kp * 10.0f) * error / 10;
+	
+	// Termo integral (com limite para evitar windup)
+	*integral += error;
+	if (*integral > 1000) *integral = 1000;
+	if (*integral < -1000) *integral = -1000;
+	int32_t integral_term = (int32_t)(ki * 10.0f) * (*integral) / 10;
+	
+	// Termo derivativo
+	int16_t derivative = error - *last_error;
+	*last_error = error;
+	int32_t derivative_term = (int32_t)(kd * 10.0f) * derivative / 10;
+	
+	// Saída PID
+	int32_t output = proportional + integral_term + derivative_term;
+	
+	// Limita a saída
+	if (output > MAX_ANGLE_CORRECTION) output = MAX_ANGLE_CORRECTION;
+	if (output < -MAX_ANGLE_CORRECTION) output = -MAX_ANGLE_CORRECTION;
+	
+	return (int16_t)output;
+}
+
 static void vtask_mpu6050(void *pvParameters)
 {
 	mpu6050_data_t mpu_data;
@@ -149,24 +203,36 @@ static void vtask_mpu6050(void *pvParameters)
 		{
 			PORTB &= ~(1 << PB5); // Desliga LED
 		}
+		
 		// Lê todos os dados do MPU6050
 		mpu6050_read_all(&mpu_data);
 		sample_count++;
 
 		// Calcula ângulos usando tabela de lookup (sem math.h)
-		// int16_t roll_tenths = fast_atan2_degrees(mpu_data.accel_y, mpu_data.accel_z);
-		// int16_t pitch_tenths = fast_atan2_degrees(-mpu_data.accel_x, mpu_data.accel_z);
+		int16_t roll_tenths = fast_atan2_degrees(mpu_data.accel_y, mpu_data.accel_z);
+		int16_t pitch_tenths = fast_atan2_degrees(-mpu_data.accel_x, mpu_data.accel_z);
 
-		// Envia dados do MPU6050 pela USART (apenas aceleração e ângulos)
-		// USART_send_string("[MPU6050] ");
-		// USART_send_string(" | Roll (°):"); USART_send_int(roll_tenths / 10);
-		// USART_send_string("."); USART_send_int(abs(roll_tenths % 10));
-		// USART_send_string(" Pitch (°):"); USART_send_int(pitch_tenths / 10);
-		// USART_send_string("."); USART_send_int(abs(pitch_tenths % 10));
-		// USART_send_string("\r\n");
+		// Atualiza ângulos globais para a task de controle
+		current_roll_angle = roll_tenths;
+		current_pitch_angle = pitch_tenths;
 
-		// Delay de 1 segundo entre leituras para melhor visualização
-		vTaskDelay(pdMS_TO_TICKS(1000));
+		// Calcula correções PID (setpoint = 0 para nível)
+		roll_correction = calculate_pid(0, roll_tenths, &roll_integral, &roll_last_error, KP_ROLL, KI_ROLL, KD_ROLL);
+		pitch_correction = calculate_pid(0, pitch_tenths, &pitch_integral, &pitch_last_error, KP_PITCH, KI_PITCH, KD_PITCH);
+
+		// Debug: Envia dados do MPU6050 pela USART a cada 10 amostras
+		if (sample_count % 10 == 0) {
+			USART_send_string("[STAB] Roll:"); USART_send_int(roll_tenths / 10);
+			USART_send_string("."); USART_send_int(abs(roll_tenths % 10));
+			USART_send_string(" Pitch:"); USART_send_int(pitch_tenths / 10);
+			USART_send_string("."); USART_send_int(abs(pitch_tenths % 10));
+			USART_send_string(" RollCorr:"); USART_send_int(roll_correction);
+			USART_send_string(" PitchCorr:"); USART_send_int(pitch_correction);
+			USART_send_string("\r\n");
+		}
+
+		// Executa a 100Hz para boa resposta de estabilização
+		vTaskDelay(pdMS_TO_TICKS(10));
 	}
 }
 
@@ -182,25 +248,31 @@ static void vtask_rc(void *pvParameters)
 
 		if (xStatus == pdPASS)
 		{
-			// Controle dos eixos PITCH (CH1) e ROLL (CH2)
+			// Controle dos eixos PITCH (CH1) e ROLL (CH2) com estabilização
 			uint16_t throttle = rc_local_values[2]; // CH3
-			int16_t pitch = rc_local_values[0] - 1500; // CH1 (centro em 1500)
-			int16_t roll  = rc_local_values[1] - 1500; // CH2 (centro em 1500)
+			int16_t pitch_cmd = rc_local_values[0] - 1500; // CH1 (centro em 1500)
+			int16_t roll_cmd  = rc_local_values[1] - 1500; // CH2 (centro em 1500)
+			
 			if (rc_local_values[4] <= 1500) {
 				throttle = 990; // Se canal auxiliar desligado, desliga motores
 			}
 
 			if (throttle >= 990 && throttle <= 2900)
 			{
-				// Aplica correções de pitch e roll nos motores
+				// Combina comando do piloto com correção de estabilização
+				// Reduz a escala dos comandos do piloto para permitir estabilização
+				int16_t pitch_total = (pitch_cmd / 4) + pitch_correction;
+				int16_t roll_total = (roll_cmd / 4) + roll_correction;
+
+				// Aplica correções nos motores (configuração X)
 				// Motor 1 (PB1): +pitch -roll
-				// Motor 2 (PB2): +pitch +roll
+				// Motor 2 (PB2): +pitch +roll  
 				// Motor 3 (PD3): -pitch +roll
 				// Motor 4 (PB3): -pitch -roll
-				int16_t m1 = throttle + pitch - roll;
-				int16_t m2 = throttle + pitch + roll;
-				int16_t m3 = throttle - pitch + roll;
-				int16_t m4 = throttle - pitch - roll;
+				int16_t m1 = throttle + pitch_total - roll_total;
+				int16_t m2 = throttle + pitch_total + roll_total;
+				int16_t m3 = throttle - pitch_total + roll_total;
+				int16_t m4 = throttle - pitch_total - roll_total;
 
 				// Mapeia para PWM seguro
 				uint16_t pwm_m1 = map_rc_to_pwm(m1);
@@ -229,21 +301,24 @@ static void vtask_rc(void *pvParameters)
 				USART_send_string(" M2:"); USART_send_int(m2_fineTuning);
 				USART_send_string(" M3:"); USART_send_int(pwm_m3);
 				USART_send_string(" M4:"); USART_send_int(m4_fineTuning);
+				USART_send_string(" | Stabilization ON");
 				USART_send_string("\r\n");
 			}
 
-			// Exibe todos os canais via USART (debug)
-			USART_send_string("CH1: ");
-			USART_send_int(rc_local_values[0]);
-			USART_send_string(" | CH2: ");
-			USART_send_int(rc_local_values[1]);
-			USART_send_string(" | CH3: ");
-			USART_send_int(rc_local_values[2]);
-			USART_send_string(" | CH4: ");
-			USART_send_int(rc_local_values[3]);
-			USART_send_string(" | CH5: ");
-			USART_send_int(rc_local_values[4]);
-			USART_send_string("\r\n");
+			// Debug dos canais RC com informações de estabilização
+			if (rc_local_values[4] > 1500) { // Só mostra quando estabilização ativa
+				USART_send_string("Roll:"); USART_send_int(current_roll_angle / 10);
+				USART_send_string("."); USART_send_int(abs(current_roll_angle % 10));
+				USART_send_string(" Pitch:"); USART_send_int(current_pitch_angle / 10);
+				USART_send_string("."); USART_send_int(abs(current_pitch_angle % 10));
+				USART_send_string(" | CH1-5: ");
+				USART_send_int(rc_local_values[0]); USART_send_string(" ");
+				USART_send_int(rc_local_values[1]); USART_send_string(" ");
+				USART_send_int(rc_local_values[2]); USART_send_string(" ");
+				USART_send_int(rc_local_values[3]); USART_send_string(" ");
+				USART_send_int(rc_local_values[4]);
+				USART_send_string("\r\n");
+			}
 		}
 
 		vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms para resposta mais rápida
