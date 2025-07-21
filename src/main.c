@@ -18,7 +18,7 @@
 #define T2DUTY_MIN 16
 #define T2DUTY_MAX 31 // 2000μs = 2ms = 12% duty cycle (31/256 * 100)
 
-#define THROTTLE_THRESHOLD 15 // Valor mínimo para considerar mudança (ajuste conforme necessário)
+#define THROTTLE_THRESHOLD 15 // Threshold para mudanças no throttle - evita oscilações pequenas
 
 // Constantes para estabilização PID
 #define KP_ROLL 1.0f   // Ganho proporcional para roll
@@ -241,6 +241,7 @@ static void vtask_rc(void *pvParameters)
 {
 	BaseType_t xStatus;
 	uint16_t rc_local_values[RC_CHANNELS] = {0};
+	static uint16_t previous_throttle = 1000; // Valor anterior do throttle para aplicar threshold
 
 	for (;;)
 	{
@@ -249,9 +250,16 @@ static void vtask_rc(void *pvParameters)
 		if (xStatus == pdPASS)
 		{
 			// Controle dos eixos PITCH (CH1) e ROLL (CH2) com estabilização
-			uint16_t throttle = rc_local_values[2]; // CH3
+			uint16_t throttle_raw = rc_local_values[2]; // CH3 - valor bruto
 			int16_t pitch_cmd = rc_local_values[0] - 1500; // CH1 (centro em 1500)
 			int16_t roll_cmd  = rc_local_values[1] - 1500; // CH2 (centro em 1500)
+			
+			// Aplica threshold no throttle para evitar mudanças muito pequenas
+			uint16_t throttle = previous_throttle; // Mantém valor anterior por padrão
+			if (abs((int16_t)throttle_raw - (int16_t)previous_throttle) > THROTTLE_THRESHOLD) {
+				throttle = throttle_raw; // Só atualiza se mudança for significativa
+				previous_throttle = throttle; // Salva novo valor
+			}
 			
 			if (rc_local_values[4] <= 1500) {
 				throttle = 990; // Se canal auxiliar desligado, desliga motores
