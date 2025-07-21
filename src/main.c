@@ -261,11 +261,33 @@ static void vtask_rc(void *pvParameters)
 				previous_throttle = throttle; // Salva novo valor
 			}
 			
-			if (rc_local_values[4] <= 1500) {
-				throttle = 990; // Se canal auxiliar desligado, desliga motores
-			}
+			if (rc_local_values[4] < 1500) {
+				uint16_t pwm_value = map_rc_to_pwm(990);
+				uint8_t pwm_value_8bit = map_rc_to_pwm_8bit(990);
 
-			if (throttle >= 990 && throttle <= 2900)
+				USART_send_string("Motor 1 e 2 (PB1/PB2) - Timer1 OC1AB: ");
+				USART_send_int(pwm_value);
+				USART_send_string("\r\n");
+
+				uint8_t m1a2_fineTunning = pwm_value+1;
+				
+				// Motor 1 (PB1) - Timer1 OC1A
+				OCR1A = m1a2_fineTunning;
+				
+				// Motor 2 (PB2) - Timer1 OC1B
+				OCR1B = m1a2_fineTunning;
+
+				// Motor 3 (PD3) - Timer2 OC2B
+				OCR2B = pwm_value_8bit;
+				
+				// Motor 4 (PB3) - Timer2 OC2A
+				uint8_t m4_fineTunning = pwm_value_8bit+6;
+				if (m4_fineTunning > 34) {
+					m4_fineTunning = 34; // Limita o valor máximo para evitar overflow
+				}
+				OCR2A = m4_fineTunning;
+			}
+			else if (throttle >= 990 && throttle <= 2900) // Verifica se o throttle está dentro do intervalo seguro
 			{
 				// Combina comando do piloto com correção de estabilização
 				// Reduz a escala dos comandos do piloto para permitir estabilização
