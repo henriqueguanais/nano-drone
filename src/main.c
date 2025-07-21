@@ -28,7 +28,7 @@
 #define ESC_MAX_PULSE 2000 // em us
 #define ESC_FREQ      50    // Hz (20ms)
 
-#define THROTTLE_SAFE 950
+#define THROTTLE_SAFE 1070
 
 #define RC_CHANNELS 6
 #define PPM_SYNC_TIME 3000
@@ -185,6 +185,14 @@ static void vtask_rc(void *pvParameters) {
                 esc_set_pulse_us(3, ESC_MIN_PULSE);
                 esc_set_pulse_us(4, ESC_MIN_PULSE);
                 motors_armed = 0;
+                current_roll_angle = 0;
+                current_pitch_angle = 0;
+                roll_correction = 0;
+                pitch_correction = 0;
+                roll_integral = 0;
+                roll_last_error = 0;
+                pitch_integral = 0;
+                pitch_last_error = 0;
             } else if (throttle >= THROTTLE_SAFE && throttle <= 2900) {
                 int16_t pitch_total = (pitch_cmd / 4) + pitch_correction;
                 int16_t roll_total = (roll_cmd / 4) + roll_correction;
