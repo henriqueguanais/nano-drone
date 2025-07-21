@@ -16,13 +16,13 @@
 #include "mpu6050.h"
 
 // Pinos PWM para ESCs (Mega 2560):
-// Motor 1: OC1A  - Pin 11 (PB5)
-// Motor 2: OC3A  - Pin 5  (PE3)
-// Motor 3: OC4A  - Pin 6  (PH3)
-// Motor 4: OC5A  - Pin 46 (PL3)
+// Motor 1: OC3A  - Pin 5  (PE3)
+// Motor 2: OC4A  - Pin 6  (PH3)
+// Motor 3: OC4B  - Pin 7  (PH4)
+// Motor 4: OC4C  - Pin 8  (PH5)
 
-#define ESC_MIN_PULSE 1000  // em us
-#define ESC_MAX_PULSE 2000  // em us
+#define ESC_MIN_PULSE 850  // em us
+#define ESC_MAX_PULSE 2000 // em us
 #define ESC_FREQ      50    // Hz (20ms)
 
 #define RC_CHANNELS 6
@@ -85,47 +85,35 @@ int16_t calculate_pid(int16_t setpoint, int16_t current_value, int32_t *integral
     return (int16_t)output;
 }
 
-// Função para inicializar todos os timers em modo Fast PWM, TOP=ICRn, freq=50Hz
+// Função para inicializar PWM usando Timer3 (OC3A) e Timer4 (OC4A, OC4B, OC4C)
 void esc_pwm_init() {
-    // Timer1 - Motor 1 (OC1A - PB5 - Pin 11)
-    TCCR1A = (1 << COM1A1) | (1 << WGM11);
-    TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11); // Prescaler 8
-    ICR1 = 39999; // 16MHz/8/50Hz - 1 ciclo = 0.5us, 40000-1 = 20ms
-    OCR1A = 3000; // 1500us inicial (neutro)
-    DDRB |= (1 << PB5);
-
-    // Timer3 - Motor 2 (OC3A - PE3 - Pin 5)
+    // Timer3 - Motor 1 (OC3A - PE3 - Pin 5)
     TCCR3A = (1 << COM3A1) | (1 << WGM31);
-    TCCR3B = (1 << WGM33) | (1 << WGM32) | (1 << CS31);
+    TCCR3B = (1 << WGM33) | (1 << WGM32) | (1 << CS11); // Prescaler 8
     ICR3 = 39999;
-    OCR3A = 3000;
+    OCR3A = 1700; // 850us inicial
     DDRE |= (1 << PE3);
 
-    // Timer4 - Motor 3 (OC4A - PH3 - Pin 6)
-    TCCR4A = (1 << COM4A1) | (1 << WGM41);
-    TCCR4B = (1 << WGM43) | (1 << WGM42) | (1 << CS41);
+    // Timer4 - Motor 2 (OC4A - PH3 - Pin 6)
+    TCCR4A = (1 << COM4A1) | (1 << COM4B1) | (1 << COM4C1) | (1 << WGM41);
+    TCCR4B = (1 << WGM43) | (1 << WGM42) | (1 << CS11); // Prescaler 8
     ICR4 = 39999;
-    OCR4A = 3000;
-    DDRH |= (1 << PH3);
-
-    // Timer5 - Motor 4 (OC5A - PL3 - Pin 46)
-    TCCR5A = (1 << COM5A1) | (1 << WGM51);
-    TCCR5B = (1 << WGM53) | (1 << WGM52) | (1 << CS51);
-    ICR5 = 39999;
-    OCR5A = 3000;
-    DDRL |= (1 << PL3);
+    OCR4A = 1700; // Motor 2 (PH3)
+    OCR4B = 1700; // Motor 3 (PH4)
+    OCR4C = 1700; // Motor 4 (PH5)
+    DDRH |= (1 << PH3) | (1 << PH4) | (1 << PH5);
 }
 
-// Função para definir o pulso de cada motor em microssegundos (1000~2000us)
+// Função para definir o pulso de cada motor em microssegundos (850~2000us)
 void esc_set_pulse_us(uint8_t motor, uint16_t pulse_us) {
     if (pulse_us < ESC_MIN_PULSE) pulse_us = ESC_MIN_PULSE;
     if (pulse_us > ESC_MAX_PULSE) pulse_us = ESC_MAX_PULSE;
     uint16_t ocr = (pulse_us * 2); // 1us = 2 contagens (prescaler 8, 16MHz)
     switch (motor) {
-        case 1: OCR1A = ocr; break;
-        case 2: OCR3A = ocr; break;
-        case 3: OCR4A = ocr; break;
-        case 4: OCR5A = ocr; break;
+        case 1: OCR3A = ocr; break; // Motor 1 - Timer3 OC3A
+        case 2: OCR4A = ocr; break; // Motor 2 - Timer4 OC4A
+        case 3: OCR4B = ocr; break; // Motor 3 - Timer4 OC4B
+        case 4: OCR4C = ocr; break; // Motor 4 - Timer4 OC4C
         default: break;
     }
 }
