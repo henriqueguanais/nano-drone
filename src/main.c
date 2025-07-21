@@ -68,7 +68,7 @@ void setup()
 	// Configura Timer1 para Fast PWM (TOP = ICR1), 50 Hz
 	TCCR1A = (1 << COM1A1) | (1 << COM1B1) | (1 << WGM11); // Fast PWM, modo 14, habilita OC1A e OC1B
 	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS12);	   // Prescaler 256
-	ICR1 = 1249;										   // 50 Hz (16MHz / (256 * 1250) = 50Hz)
+	ICR1 = 1024;										   // 50 Hz (16MHz / (256 * 1250) = 50Hz)
 	OCR1A = 62;											   // 1000μs (1ms) - Motor 1 (PB1) - posição de armamento ESC
 	OCR1B = 62;											   // 1000μs (1ms) - Motor 2 (PB2) - posição de armamento ESC
 	TIMSK1 = 0x00;										   // Desabilita interrupções do Timer1
@@ -349,10 +349,15 @@ static void vtask_rc(void *pvParameters)
 					m4_fineTuning = 34; // Limita o valor máximo para evitar overflow
 				}
 
-				// Aplica PWM nos motores com fine tuning
-				OCR1A = m1_fineTuning; // Motor 1 (PB1)
-				OCR1B = m2_fineTuning; // Motor 2 (PB2)
-				OCR2B = pwm_m3;		   // Motor 3 (PD3) - sem ajuste
+				// // Aplica PWM nos motores com fine tuning
+				// OCR1A = m1_fineTuning; // Motor 1 (PB1)
+				// OCR1B = m2_fineTuning; // Motor 2 (PB2)
+				// OCR2B = pwm_m3;		   // Motor 3 (PD3) - sem ajuste
+				// OCR2A = m4_fineTuning; // Motor 4 (PB3)
+
+				OCR1A = pwm_m1; // Motor 1 (PB1)
+				OCR1B = pwm_m2; // Motor 2 (PB2)
+				OCR2B = pwm_m3; // Motor 3 (PD3) - sem ajuste
 				OCR2A = m4_fineTuning; // Motor 4 (PB3)
 			}
 		}
