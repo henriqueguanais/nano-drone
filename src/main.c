@@ -9,9 +9,12 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <util/delay.h>
+#include <stdlib.h> // Para abs()
+
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+
 #include "USART.h"
 #include "mpu6050.h"
 
@@ -49,6 +52,7 @@ static int32_t roll_integral = 0;
 static int16_t roll_last_error = 0;
 static int32_t pitch_integral = 0;
 static int16_t pitch_last_error = 0;
+volatile uint8_t motors_armed = 0; // 0 = desarmado, 1 = armado
 
 // Lookup para atan2
 const int16_t atan_lookup[51] = {
@@ -180,6 +184,7 @@ static void vtask_rc(void *pvParameters) {
                 esc_set_pulse_us(2, ESC_MIN_PULSE);
                 esc_set_pulse_us(3, ESC_MIN_PULSE);
                 esc_set_pulse_us(4, ESC_MIN_PULSE);
+                motors_armed = 0;
             } else if (throttle >= THROTTLE_SAFE && throttle <= 2900) {
                 int16_t pitch_total = (pitch_cmd / 4) + pitch_correction;
                 int16_t roll_total = -((roll_cmd / 4) + roll_correction);
@@ -191,10 +196,24 @@ static void vtask_rc(void *pvParameters) {
                 esc_set_pulse_us(2, m2);
                 esc_set_pulse_us(3, m3);
                 esc_set_pulse_us(4, m4);
+                motors_armed = 1;
+            } else {
+                motors_armed = 0;
             }
         }
-        PORTB ^= (1 << PL7); // Pisca LED Mega: PL7
         vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+static void vtask_blink_led_pl7(void *pvParameters) {
+    for (;;) {
+        if (motors_armed) {
+            PORTL |= (1 << PL7); // LED aceso
+            vTaskDelay(pdMS_TO_TICKS(50));
+        } else {
+            PORTL ^= (1 << PL7); // Pisca LED
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
     }
 }
 
@@ -246,12 +265,13 @@ ISR(INT4_vect) {
 
 int main(void) {
     esc_pwm_init();
-    timer2_init_for_micros(); // Inicializa Timer2 para micros()
+    timer2_init_for_micros();
     USART_init(MYUBRR);
     mpu6050_init();
     xQueueRC = xQueueCreate(1, sizeof(uint16_t) * RC_CHANNELS);
     xTaskCreate(vtask_rc, (const char *)"serial", 128, NULL, 1, NULL);
     xTaskCreate(vtask_mpu6050, (const char *)"mpu6050", 192, NULL, 1, NULL);
+    xTaskCreate(vtask_blink_led_pl7, (const char *)"blink_led", 64, NULL, 1, NULL); // Task para piscar LED PL7
     // Configura INT4 para borda de subida (PE4 - Digital 2)
     EICRB |= (1 << ISC41) | (1 << ISC40); // INT4 rising edge
     EIMSK |= (1 << INT4); // Enable INT4
