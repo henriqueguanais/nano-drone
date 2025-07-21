@@ -296,29 +296,9 @@ static void vtask_rc(void *pvParameters)
 				OCR2B = pwm_m3;        // Motor 3 (PD3) - sem ajuste
 				OCR2A = m4_fineTuning; // Motor 4 (PB3)
 
-				// Debug via USART
-				USART_send_string("M1:"); USART_send_int(m1_fineTuning);
-				USART_send_string(" M2:"); USART_send_int(m2_fineTuning);
-				USART_send_string(" M3:"); USART_send_int(pwm_m3);
-				USART_send_string(" M4:"); USART_send_int(m4_fineTuning);
-				USART_send_string(" | Stabilization ON");
-				USART_send_string("\r\n");
 			}
 
-			// Debug dos canais RC com informações de estabilização
-			if (rc_local_values[4] > 1500) { // Só mostra quando estabilização ativa
-				USART_send_string("Roll:"); USART_send_int(current_roll_angle / 10);
-				USART_send_string("."); USART_send_int(abs(current_roll_angle % 10));
-				USART_send_string(" Pitch:"); USART_send_int(current_pitch_angle / 10);
-				USART_send_string("."); USART_send_int(abs(current_pitch_angle % 10));
-				USART_send_string(" | CH1-5: ");
-				USART_send_int(rc_local_values[0]); USART_send_string(" ");
-				USART_send_int(rc_local_values[1]); USART_send_string(" ");
-				USART_send_int(rc_local_values[2]); USART_send_string(" ");
-				USART_send_int(rc_local_values[3]); USART_send_string(" ");
-				USART_send_int(rc_local_values[4]);
-				USART_send_string("\r\n");
-			}
+			
 		}
 
 		vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms para resposta mais rápida
