@@ -33,14 +33,16 @@
 #define RC_CHANNELS 6
 #define PPM_SYNC_TIME 3000
 #define THROTTLE_THRESHOLD 15
+#define THROTTLE_MAX_ERROR_ACCUMULATION 50  // Máximo erro acumulativo antes de reset
+#define THROTTLE_FILTER_SIZE 3              // Tamanho do filtro de média móvel
 
 // PID
 #define KP_ROLL 1.0f
 #define KI_ROLL 0.1f
-#define KD_ROLL 0.05f
+#define KD_ROLL 0.1f
 #define KP_PITCH 1.0f
 #define KI_PITCH 0.1f
-#define KD_PITCH 0.05f
+#define KD_PITCH 0.1f
 #define MAX_ANGLE_CORRECTION 200
 
 QueueHandle_t xQueueRC;
@@ -167,16 +169,53 @@ static void vtask_rc(void *pvParameters) {
     BaseType_t xStatus;
     uint16_t rc_local_values[RC_CHANNELS] = {0};
     static uint16_t previous_throttle = ESC_MIN_PULSE;
+    static uint16_t throttle_filter[THROTTLE_FILTER_SIZE] = {ESC_MIN_PULSE, ESC_MIN_PULSE, ESC_MIN_PULSE};
+    static uint8_t filter_index = 0;
+    static int32_t accumulated_error = 0;  // Para detectar drift acumulativo
+    static uint32_t error_reset_counter = 0;
+    
     for (;;) {
         xStatus = xQueueReceive(xQueueRC, &rc_local_values, portMAX_DELAY);
         if (xStatus == pdPASS) {
             uint16_t throttle_raw = rc_local_values[2];
             int16_t pitch_cmd = rc_local_values[0] - 1500;
             int16_t roll_cmd  = rc_local_values[1] - 1500;
+            
+            // Adiciona ao filtro de média móvel
+            throttle_filter[filter_index] = throttle_raw;
+            filter_index = (filter_index + 1) % THROTTLE_FILTER_SIZE;
+            
+            // Calcula média móvel
+            uint32_t throttle_sum = 0;
+            for (uint8_t i = 0; i < THROTTLE_FILTER_SIZE; i++) {
+                throttle_sum += throttle_filter[i];
+            }
+            uint16_t throttle_filtered = throttle_sum / THROTTLE_FILTER_SIZE;
+            
+            // Calcula diferença e erro acumulativo
+            int16_t throttle_diff = (int16_t)throttle_filtered - (int16_t)previous_throttle;
+            accumulated_error += throttle_diff;
+            
             uint16_t throttle = previous_throttle;
-            if (abs((int16_t)throttle_raw - (int16_t)previous_throttle) > THROTTLE_THRESHOLD) {
-                throttle = throttle_raw;
+            
+            // Aplica threshold com correção de erro acumulativo
+            if (abs(throttle_diff) > THROTTLE_THRESHOLD || 
+                abs(accumulated_error) > THROTTLE_MAX_ERROR_ACCUMULATION) {
+                
+                throttle = throttle_filtered;
                 previous_throttle = throttle;
+                
+                // Reset do erro acumulativo se a correção foi aplicada
+                if (abs(accumulated_error) > THROTTLE_MAX_ERROR_ACCUMULATION) {
+                    accumulated_error = 0;
+                    error_reset_counter++;
+                }
+            }
+            
+            // Reset periódico do erro acumulativo para evitar drift a longo prazo
+            if (error_reset_counter > 100) {
+                accumulated_error = 0;
+                error_reset_counter = 0;
             }
             if (rc_local_values[4] <= 1500) {
                 // Desarmado: todos os motores em 850us
@@ -185,6 +224,8 @@ static void vtask_rc(void *pvParameters) {
                 esc_set_pulse_us(3, ESC_MIN_PULSE);
                 esc_set_pulse_us(4, ESC_MIN_PULSE);
                 motors_armed = 0;
+                
+                // Reset das variáveis de controle
                 current_roll_angle = 0;
                 current_pitch_angle = 0;
                 roll_correction = 0;
@@ -193,6 +234,14 @@ static void vtask_rc(void *pvParameters) {
                 roll_last_error = 0;
                 pitch_integral = 0;
                 pitch_last_error = 0;
+                
+                // Reset do sistema de throttle
+                previous_throttle = ESC_MIN_PULSE;
+                accumulated_error = 0;
+                error_reset_counter = 0;
+                for (uint8_t i = 0; i < THROTTLE_FILTER_SIZE; i++) {
+                    throttle_filter[i] = ESC_MIN_PULSE;
+                }
             } else if (throttle >= THROTTLE_SAFE && throttle <= 2900) {
                 int16_t pitch_total = (pitch_cmd / 4) + pitch_correction;
                 int16_t roll_total = (roll_cmd / 4) + roll_correction;
@@ -212,6 +261,10 @@ static void vtask_rc(void *pvParameters) {
                 motors_armed = 1;
             } else {
                 motors_armed = 0;
+                esc_set_pulse_us(1, ESC_MIN_PULSE);
+                esc_set_pulse_us(2, ESC_MIN_PULSE);
+                esc_set_pulse_us(3, ESC_MIN_PULSE);
+                esc_set_pulse_us(4, ESC_MIN_PULSE);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(50));
