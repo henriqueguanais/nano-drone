@@ -262,7 +262,7 @@ static void vtask_rc(void *pvParameters)
 				// Combina comando do piloto com correção de estabilização
 				// Reduz a escala dos comandos do piloto para permitir estabilização
 				int16_t pitch_total = -((pitch_cmd / 4) + pitch_correction);
-				int16_t roll_total = -((roll_cmd / 4) + roll_correction); // Roll invertido
+				int16_t roll_total = ((roll_cmd / 4) + roll_correction); // Roll invertido
 
 				// Aplica correções nos motores (configuração X)
 				// Motor 1 (PB1): +pitch -roll
