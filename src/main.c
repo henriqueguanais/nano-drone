@@ -209,8 +209,8 @@ static void vtask_mpu6050(void *pvParameters)
 		sample_count++;
 
 		// Calcula ângulos usando tabela de lookup (sem math.h)
-		int16_t roll_tenths = fast_atan2_degrees(mpu_data.accel_y, mpu_data.accel_z);
-		int16_t pitch_tenths = fast_atan2_degrees(-mpu_data.accel_x, mpu_data.accel_z);
+		int16_t roll_tenths = fast_atan2_degrees(mpu_data.accel_x, mpu_data.accel_z);
+		int16_t pitch_tenths = fast_atan2_degrees(-mpu_data.accel_y, mpu_data.accel_z);
 
 		// Atualiza ângulos globais para a task de controle
 		current_roll_angle = roll_tenths;
@@ -261,8 +261,8 @@ static void vtask_rc(void *pvParameters)
 			{
 				// Combina comando do piloto com correção de estabilização
 				// Reduz a escala dos comandos do piloto para permitir estabilização
-				int16_t pitch_total = -((pitch_cmd / 4) + pitch_correction);
-				int16_t roll_total = ((roll_cmd / 4) + roll_correction); // Roll invertido
+				int16_t pitch_total = (pitch_cmd / 4) + pitch_correction;
+				int16_t roll_total = -((roll_cmd / 4) + roll_correction); // Roll invertido
 
 				// Aplica correções nos motores (configuração X)
 				// Motor 1 (PB1): +pitch -roll
