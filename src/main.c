@@ -187,16 +187,16 @@ static void vtask_rc(void *pvParameters) {
                 motors_armed = 0;
             } else if (throttle >= THROTTLE_SAFE && throttle <= 2900) {
                 int16_t pitch_total = (pitch_cmd / 4) + pitch_correction;
-                int16_t roll_total = -((roll_cmd / 4) + roll_correction);
-                // Correção da ordem dos motores conforme solicitado:
-                // Frente: acelera 3 e 4
-                // Trás: acelera 1 e 2
-                // Esquerda: acelera 2 e 4
-                // Direita: acelera 1 e 3
-                int16_t m1 = throttle - pitch_total - roll_total; // Frente Direita
-                int16_t m2 = throttle + pitch_total - roll_total; // Traseira Esquerda
-                int16_t m3 = throttle - pitch_total + roll_total; // Frente Esquerda
-                int16_t m4 = throttle + pitch_total + roll_total; // Traseira Direita
+                int16_t roll_total = (roll_cmd / 4) + roll_correction;
+                // Configuração corrigida dos motores:
+                // Frente: acelera 1 e 2 (frente esquerda e frente direita)
+                // Trás: acelera 3 e 4 (traseira esquerda e traseira direita)
+                // Esquerda: acelera 2 e 4 (frente direita e traseira direita)
+                // Direita: acelera 1 e 3 (frente esquerda e traseira esquerda)
+                int16_t m1 = throttle + pitch_total + roll_total; // Frente Esquerda
+                int16_t m2 = throttle + pitch_total - roll_total; // Frente Direita
+                int16_t m3 = throttle - pitch_total + roll_total; // Traseira Esquerda
+                int16_t m4 = throttle - pitch_total - roll_total; // Traseira Direita
                 esc_set_pulse_us(1, m1);
                 esc_set_pulse_us(2, m2);
                 esc_set_pulse_us(3, m3);
