@@ -3,7 +3,7 @@
 # Configurações
 MCU     = atmega2560
 F_CPU   = 16000000UL
-PORT    = COM5   # Altere para a porta correta do seu sistema
+PORT    = COM7  # Altere para a porta correta do seu sistema
 BAUD    = 115200
 PROGRAMMER = arduino
 
@@ -17,14 +17,14 @@ LIB_DIR = lib
 SRC = $(wildcard $(SRC_DIR)/*.c)
 # Arquivos específicos do FreeRTOS necessários para FreeRTOS.h e task.h
 LIB_SRC = $(LIB_DIR)/freertos/src/tasks.c \
-          $(LIB_DIR)/freertos/src/list.c \
-          $(LIB_DIR)/freertos/src/port.c \
-          $(LIB_DIR)/freertos/src/heap_3.c \
-          $(LIB_DIR)/freertos/src/timers.c \
-          $(LIB_DIR)/freertos/src/queue.c
+		  $(LIB_DIR)/freertos/src/list.c \
+		  $(LIB_DIR)/freertos/src/port.c \
+		  $(LIB_DIR)/freertos/src/heap_3.c \
+		  $(LIB_DIR)/freertos/src/timers.c \
+		  $(LIB_DIR)/freertos/src/queue.c
 ALL_SRC = $(SRC) $(LIB_SRC)
 OBJ = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRC)) \
-      $(patsubst $(LIB_DIR)/freertos/src/%.c,$(BUILD_DIR)/%.o,$(LIB_SRC))
+	  $(patsubst $(LIB_DIR)/freertos/src/%.c,$(BUILD_DIR)/%.o,$(LIB_SRC))
 
 # Compilador e flags
 CC = avr-gcc
