@@ -3,7 +3,7 @@
 
 #include <avr/io.h>
 
-#define BAUD 57600
+#define BAUD 115200
 #define MYUBRR ((F_CPU / (16UL * BAUD)) - 1)
 
 // Inicializa a USART com o valor do registrador UBRR
