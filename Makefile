@@ -1,10 +1,10 @@
 # Makefile para projeto AVR ATmega328P
 
 # Configurações
-MCU     = atmega328p
+MCU     = atmega2560
 F_CPU   = 16000000UL
 PORT    = COM5   # Altere para a porta correta do seu sistema
-BAUD    = 57600
+BAUD    = 115200
 PROGRAMMER = arduino
 
 # Diretórios
