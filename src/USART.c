@@ -2,11 +2,12 @@
 #include <stdlib.h>  // Para itoa()
 
 void USART_init(unsigned int ubrr) {
+    // Configura registradores para USART0 do Mega
     UBRR0H = (unsigned char)(ubrr >> 8);
     UBRR0L = (unsigned char)ubrr;
-
-    UCSR0B = (1 << RXEN0) | (1 << TXEN0);
-    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
+    UCSR0A = 0x00; // Limpa flags
+    UCSR0B = (1 << RXEN0) | (1 << TXEN0); // Habilita RX e TX
+    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // 8 bits, sem paridade, 1 stop
 }
 
 void USART_transmit(unsigned char data) {

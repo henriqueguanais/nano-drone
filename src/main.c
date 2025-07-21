@@ -25,6 +25,8 @@
 #define ESC_MAX_PULSE 2000 // em us
 #define ESC_FREQ      50    // Hz (20ms)
 
+#define THROTTLE_SAFE 1070
+
 #define RC_CHANNELS 6
 #define PPM_SYNC_TIME 3000
 #define THROTTLE_THRESHOLD 15
@@ -91,17 +93,19 @@ void esc_pwm_init() {
     TCCR3A = (1 << COM3A1) | (1 << WGM31);
     TCCR3B = (1 << WGM33) | (1 << WGM32) | (1 << CS11); // Prescaler 8
     ICR3 = 39999;
-    OCR3A = 1700; // 850us inicial
+    OCR3A = ESC_MIN_PULSE * 2; // 850us inicial
     DDRE |= (1 << PE3);
 
-    // Timer4 - Motor 2 (OC4A - PH3 - Pin 6)
+    // Timer4 - Motor 2 (OC4A - PH3 - Pin 6), Motor 3 (OC4B - PH4), Motor 4 (OC4C - PH5)
     TCCR4A = (1 << COM4A1) | (1 << COM4B1) | (1 << COM4C1) | (1 << WGM41);
     TCCR4B = (1 << WGM43) | (1 << WGM42) | (1 << CS11); // Prescaler 8
     ICR4 = 39999;
-    OCR4A = 1700; // Motor 2 (PH3)
-    OCR4B = 1700; // Motor 3 (PH4)
-    OCR4C = 1700; // Motor 4 (PH5)
+    OCR4A = ESC_MIN_PULSE * 2; // Motor 2 (PH3)
+    OCR4B = ESC_MIN_PULSE * 2; // Motor 3 (PH4)
+    OCR4C = ESC_MIN_PULSE * 2; // Motor 4 (PH5)
     DDRH |= (1 << PH3) | (1 << PH4) | (1 << PH5);
+
+    DDRL |= (1 << PL7); // led externo
 }
 
 // Função para definir o pulso de cada motor em microssegundos (850~2000us)
@@ -123,7 +127,7 @@ static void vtask_mpu6050(void *pvParameters) {
     uint32_t sample_count = 0;
     uint8_t led_state = 0;
     if (!mpu6050_test_connection()) {
-        USART_send_string("ERRO: MPU6050 nao encontrado!\r\n");
+        // USART_send_string("ERRO: MPU6050 nao encontrado!\r\n");
         for (;;) {
             // Pisca LED Mega: PB7
             PORTB ^= (1 << PB7);
@@ -142,15 +146,15 @@ static void vtask_mpu6050(void *pvParameters) {
         current_pitch_angle = pitch_tenths;
         roll_correction = calculate_pid(0, roll_tenths, &roll_integral, &roll_last_error, KP_ROLL, KI_ROLL, KD_ROLL);
         pitch_correction = calculate_pid(0, pitch_tenths, &pitch_integral, &pitch_last_error, KP_PITCH, KI_PITCH, KD_PITCH);
-        if (sample_count % 10 == 0) {
-            USART_send_string("[STAB] Roll:"); USART_send_int(roll_tenths / 10);
-            USART_send_string("."); USART_send_int(abs(roll_tenths % 10));
-            USART_send_string(" Pitch:"); USART_send_int(pitch_tenths / 10);
-            USART_send_string("."); USART_send_int(abs(pitch_tenths % 10));
-            USART_send_string(" RollCorr:"); USART_send_int(roll_correction);
-            USART_send_string(" PitchCorr:"); USART_send_int(pitch_correction);
-            USART_send_string("\r\n");
-        }
+        // if (sample_count % 10 == 0) {
+        //     USART_send_string("[STAB] Roll:"); USART_send_int(roll_tenths / 10);
+        //     USART_send_string("."); USART_send_int(abs(roll_tenths % 10));
+        //     USART_send_string(" Pitch:"); USART_send_int(pitch_tenths / 10);
+        //     USART_send_string("."); USART_send_int(abs(pitch_tenths % 10));
+        //     USART_send_string(" RollCorr:"); USART_send_int(roll_correction);
+        //     USART_send_string(" PitchCorr:"); USART_send_int(pitch_correction);
+        //     USART_send_string("\r\n");
+        // }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -158,7 +162,7 @@ static void vtask_mpu6050(void *pvParameters) {
 static void vtask_rc(void *pvParameters) {
     BaseType_t xStatus;
     uint16_t rc_local_values[RC_CHANNELS] = {0};
-    static uint16_t previous_throttle = 1000;
+    static uint16_t previous_throttle = ESC_MIN_PULSE;
     for (;;) {
         xStatus = xQueueReceive(xQueueRC, &rc_local_values, portMAX_DELAY);
         if (xStatus == pdPASS) {
@@ -170,8 +174,13 @@ static void vtask_rc(void *pvParameters) {
                 throttle = throttle_raw;
                 previous_throttle = throttle;
             }
-            if (rc_local_values[4] <= 1500) throttle = 990;
-            if (throttle >= 990 && throttle <= 2900) {
+            if (rc_local_values[4] <= 1500) {
+                // Desarmado: todos os motores em 850us
+                esc_set_pulse_us(1, ESC_MIN_PULSE);
+                esc_set_pulse_us(2, ESC_MIN_PULSE);
+                esc_set_pulse_us(3, ESC_MIN_PULSE);
+                esc_set_pulse_us(4, ESC_MIN_PULSE);
+            } else if (throttle >= THROTTLE_SAFE && throttle <= 2900) {
                 int16_t pitch_total = (pitch_cmd / 4) + pitch_correction;
                 int16_t roll_total = -((roll_cmd / 4) + roll_correction);
                 int16_t m1 = throttle + pitch_total - roll_total;
@@ -184,31 +193,32 @@ static void vtask_rc(void *pvParameters) {
                 esc_set_pulse_us(4, m4);
             }
         }
+        PORTB ^= (1 << PL7); // Pisca LED Mega: PL7
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
-// --- Função micros() para ATmega2560 ---
-volatile uint32_t timer0_overflow_count = 0;
-ISR(TIMER0_OVF_vect) {
-    timer0_overflow_count++;
+// --- Função micros() usando Timer2 para ATmega2560 ---
+volatile uint32_t timer2_overflow_count = 0;
+ISR(TIMER2_OVF_vect) {
+    timer2_overflow_count++;
 }
 
-void timer0_init_for_micros() {
-    TCCR0A = 0x00; // Normal mode
-    TCCR0B = (1 << CS01) | (1 << CS00); // Prescaler 64 (1 tick = 4us)
-    TIMSK0 = (1 << TOIE0); // Habilita interrupção de overflow
+void timer2_init_for_micros() {
+    TCCR2A = 0x00; // Normal mode
+    TCCR2B = (1 << CS22); // Prescaler 64 (1 tick = 4us)
+    TIMSK2 = (1 << TOIE2); // Habilita interrupção de overflow
 }
 
 uint32_t micros() {
-    uint8_t tcnt0_val;
+    uint8_t tcnt2_val;
     uint32_t overflow_count;
     cli();
-    tcnt0_val = TCNT0;
-    overflow_count = timer0_overflow_count;
+    tcnt2_val = TCNT2;
+    overflow_count = timer2_overflow_count;
     sei();
-    // Cada tick = 4us, Timer0 8-bit
-    return ((overflow_count << 8) + tcnt0_val) * 4;
+    // Cada tick = 4us, Timer2 8-bit
+    return ((overflow_count << 8) + tcnt2_val) * 4;
 }
 
 // Interrupção externa INT4 para capturar PPM no Mega (PE4 - Digital 2)
@@ -236,7 +246,7 @@ ISR(INT4_vect) {
 
 int main(void) {
     esc_pwm_init();
-    timer0_init_for_micros();
+    timer2_init_for_micros(); // Inicializa Timer2 para micros()
     USART_init(MYUBRR);
     mpu6050_init();
     xQueueRC = xQueueCreate(1, sizeof(uint16_t) * RC_CHANNELS);
