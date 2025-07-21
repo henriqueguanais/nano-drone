@@ -22,7 +22,7 @@
 
 // Constantes para estabilização PID
 #define KP_ROLL 1.0f   // Ganho proporcional para roll
-#define KI_ROLL 0.1f   // Ganho integral para roll  
+#define KI_ROLL 0.1f   // Ganho integral para roll
 #define KD_ROLL 0.05f  // Ganho derivativo para roll
 #define KP_PITCH 1.0f  // Ganho proporcional para pitch
 #define KI_PITCH 0.1f  // Ganho integral para pitch
@@ -39,16 +39,16 @@ uint32_t get_timer0_microseconds(void);
 QueueHandle_t xQueueRC;
 
 // Variáveis globais para estabilização
-volatile int16_t current_roll_angle = 0;   // Ângulo atual de roll em décimos de grau
-volatile int16_t current_pitch_angle = 0;  // Ângulo atual de pitch em décimos de grau
-volatile int16_t roll_correction = 0;      // Correção PID para roll
-volatile int16_t pitch_correction = 0;     // Correção PID para pitch
+volatile int16_t current_roll_angle = 0;  // Ângulo atual de roll em décimos de grau
+volatile int16_t current_pitch_angle = 0; // Ângulo atual de pitch em décimos de grau
+volatile int16_t roll_correction = 0;	  // Correção PID para roll
+volatile int16_t pitch_correction = 0;	  // Correção PID para pitch
 
 // Variáveis PID para roll
 static int32_t roll_integral = 0;
 static int16_t roll_last_error = 0;
 
-// Variáveis PID para pitch  
+// Variáveis PID para pitch
 static int32_t pitch_integral = 0;
 static int16_t pitch_last_error = 0;
 
@@ -144,28 +144,32 @@ int16_t calculate_pid(int16_t setpoint, int16_t current_value, int32_t *integral
 {
 	// Calcula o erro (setpoint - valor atual)
 	int16_t error = setpoint - current_value;
-	
+
 	// Termo proporcional
 	int32_t proportional = (int32_t)(kp * 10.0f) * error / 10;
-	
+
 	// Termo integral (com limite para evitar windup)
 	*integral += error;
-	if (*integral > 1000) *integral = 1000;
-	if (*integral < -1000) *integral = -1000;
+	if (*integral > 1000)
+		*integral = 1000;
+	if (*integral < -1000)
+		*integral = -1000;
 	int32_t integral_term = (int32_t)(ki * 10.0f) * (*integral) / 10;
-	
+
 	// Termo derivativo
 	int16_t derivative = error - *last_error;
 	*last_error = error;
 	int32_t derivative_term = (int32_t)(kd * 10.0f) * derivative / 10;
-	
+
 	// Saída PID
 	int32_t output = proportional + integral_term + derivative_term;
-	
+
 	// Limita a saída
-	if (output > MAX_ANGLE_CORRECTION) output = MAX_ANGLE_CORRECTION;
-	if (output < -MAX_ANGLE_CORRECTION) output = -MAX_ANGLE_CORRECTION;
-	
+	if (output > MAX_ANGLE_CORRECTION)
+		output = MAX_ANGLE_CORRECTION;
+	if (output < -MAX_ANGLE_CORRECTION)
+		output = -MAX_ANGLE_CORRECTION;
+
 	return (int16_t)output;
 }
 
@@ -203,7 +207,7 @@ static void vtask_mpu6050(void *pvParameters)
 		{
 			PORTB &= ~(1 << PB5); // Desliga LED
 		}
-		
+
 		// Lê todos os dados do MPU6050
 		mpu6050_read_all(&mpu_data);
 		sample_count++;
@@ -221,13 +225,20 @@ static void vtask_mpu6050(void *pvParameters)
 		pitch_correction = calculate_pid(0, pitch_tenths, &pitch_integral, &pitch_last_error, KP_PITCH, KI_PITCH, KD_PITCH);
 
 		// Debug: Envia dados do MPU6050 pela USART a cada 10 amostras
-		if (sample_count % 10 == 0) {
-			USART_send_string("[STAB] Roll:"); USART_send_int(roll_tenths / 10);
-			USART_send_string("."); USART_send_int(abs(roll_tenths % 10));
-			USART_send_string(" Pitch:"); USART_send_int(pitch_tenths / 10);
-			USART_send_string("."); USART_send_int(abs(pitch_tenths % 10));
-			USART_send_string(" RollCorr:"); USART_send_int(roll_correction);
-			USART_send_string(" PitchCorr:"); USART_send_int(pitch_correction);
+		if (sample_count % 10 == 0)
+		{
+			USART_send_string("[STAB] Roll:");
+			USART_send_int(roll_tenths / 10);
+			USART_send_string(".");
+			USART_send_int(abs(roll_tenths % 10));
+			USART_send_string(" Pitch:");
+			USART_send_int(pitch_tenths / 10);
+			USART_send_string(".");
+			USART_send_int(abs(pitch_tenths % 10));
+			USART_send_string(" RollCorr:");
+			USART_send_int(roll_correction);
+			USART_send_string(" PitchCorr:");
+			USART_send_int(pitch_correction);
 			USART_send_string("\r\n");
 		}
 
@@ -250,18 +261,20 @@ static void vtask_rc(void *pvParameters)
 		if (xStatus == pdPASS)
 		{
 			// Controle dos eixos PITCH (CH1) e ROLL (CH2) com estabilização
-			uint16_t throttle_raw = rc_local_values[2]; // CH3 - valor bruto
+			uint16_t throttle_raw = rc_local_values[2];	   // CH3 - valor bruto
 			int16_t pitch_cmd = rc_local_values[0] - 1500; // CH1 (centro em 1500)
-			int16_t roll_cmd  = rc_local_values[1] - 1500; // CH2 (centro em 1500)
-			
+			int16_t roll_cmd = rc_local_values[1] - 1500;  // CH2 (centro em 1500)
+
 			// Aplica threshold no throttle para evitar mudanças muito pequenas
 			uint16_t throttle = previous_throttle; // Mantém valor anterior por padrão
-			if (abs((int16_t)throttle_raw - (int16_t)previous_throttle) > THROTTLE_THRESHOLD) {
-				throttle = throttle_raw; // Só atualiza se mudança for significativa
+			if (abs((int16_t)throttle_raw - (int16_t)previous_throttle) > THROTTLE_THRESHOLD)
+			{
+				throttle = throttle_raw;	  // Só atualiza se mudança for significativa
 				previous_throttle = throttle; // Salva novo valor
 			}
-			
-			if (rc_local_values[4] < 1500) {
+
+			if (rc_local_values[4] < 1500)
+			{
 				uint16_t pwm_value = map_rc_to_pwm(990);
 				uint8_t pwm_value_8bit = map_rc_to_pwm_8bit(990);
 
@@ -269,23 +282,39 @@ static void vtask_rc(void *pvParameters)
 				USART_send_int(pwm_value);
 				USART_send_string("\r\n");
 
-				uint8_t m1a2_fineTunning = pwm_value+1;
-				
+				uint8_t m1a2_fineTunning = pwm_value + 1;
+
 				// Motor 1 (PB1) - Timer1 OC1A
 				OCR1A = m1a2_fineTunning;
-				
+
 				// Motor 2 (PB2) - Timer1 OC1B
 				OCR1B = m1a2_fineTunning;
 
 				// Motor 3 (PD3) - Timer2 OC2B
 				OCR2B = pwm_value_8bit;
-				
+
 				// Motor 4 (PB3) - Timer2 OC2A
-				uint8_t m4_fineTunning = pwm_value_8bit+6;
-				if (m4_fineTunning > 34) {
+				uint8_t m4_fineTunning = pwm_value_8bit + 6;
+				if (m4_fineTunning > 34)
+				{
 					m4_fineTunning = 34; // Limita o valor máximo para evitar overflow
 				}
 				OCR2A = m4_fineTunning;
+
+				// Variáveis globais para estabilização
+				current_roll_angle = 0;  // Ângulo atual de roll em décimos de grau
+				current_pitch_angle = 0; // Ângulo atual de pitch em décimos de grau
+				roll_correction = 0;	  // Correção PID para roll
+				pitch_correction = 0;	  // Correção PID para pitch
+
+				// Variáveis PID para roll
+				roll_integral = 0;
+				roll_last_error = 0;
+
+				// Variáveis PID para pitch
+				pitch_integral = 0;
+				pitch_last_error = 0;
+
 			}
 			else if (throttle >= 990 && throttle <= 2900) // Verifica se o throttle está dentro do intervalo seguro
 			{
@@ -296,7 +325,7 @@ static void vtask_rc(void *pvParameters)
 
 				// Aplica correções nos motores (configuração X)
 				// Motor 1 (PB1): +pitch -roll
-				// Motor 2 (PB2): +pitch +roll  
+				// Motor 2 (PB2): +pitch +roll
 				// Motor 3 (PD3): -pitch +roll
 				// Motor 4 (PB3): -pitch -roll
 				int16_t m1 = throttle + pitch_total - roll_total;
@@ -307,13 +336,13 @@ static void vtask_rc(void *pvParameters)
 				// Mapeia para PWM seguro
 				uint16_t pwm_m1 = map_rc_to_pwm(m1);
 				uint16_t pwm_m2 = map_rc_to_pwm(m2);
-				uint8_t  pwm_m3 = map_rc_to_pwm_8bit(m3);
-				uint8_t  pwm_m4 = map_rc_to_pwm_8bit(m4);
+				uint8_t pwm_m3 = map_rc_to_pwm_8bit(m3);
+				uint8_t pwm_m4 = map_rc_to_pwm_8bit(m4);
 
 				// Fine tuning para compensar diferenças dos motores
 				uint16_t m1_fineTuning = pwm_m1 + 1; // Motor 1 ajuste
 				uint16_t m2_fineTuning = pwm_m2 + 1; // Motor 2 ajuste
-				
+
 				uint8_t m4_fineTuning = pwm_m4 + 6; // Motor 4 ajuste
 				if (m4_fineTuning > 34)
 				{
@@ -323,12 +352,9 @@ static void vtask_rc(void *pvParameters)
 				// Aplica PWM nos motores com fine tuning
 				OCR1A = m1_fineTuning; // Motor 1 (PB1)
 				OCR1B = m2_fineTuning; // Motor 2 (PB2)
-				OCR2B = pwm_m3;        // Motor 3 (PD3) - sem ajuste
+				OCR2B = pwm_m3;		   // Motor 3 (PD3) - sem ajuste
 				OCR2A = m4_fineTuning; // Motor 4 (PB3)
-
 			}
-
-			
 		}
 
 		vTaskDelay(pdMS_TO_TICKS(50)); // Atualiza a cada 50ms para resposta mais rápida
