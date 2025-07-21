@@ -28,7 +28,7 @@
 #define ESC_MAX_PULSE 2000 // em us
 #define ESC_FREQ      50    // Hz (20ms)
 
-#define THROTTLE_SAFE 1070
+#define THROTTLE_SAFE 950
 
 #define RC_CHANNELS 6
 #define PPM_SYNC_TIME 3000
@@ -188,15 +188,15 @@ static void vtask_rc(void *pvParameters) {
             } else if (throttle >= THROTTLE_SAFE && throttle <= 2900) {
                 int16_t pitch_total = (pitch_cmd / 4) + pitch_correction;
                 int16_t roll_total = -((roll_cmd / 4) + roll_correction);
-                // Nova ordem física dos motores:
-                // Motor 3: Frente Esquerda
-                // Motor 1: Frente Direita
-                // Motor 2: Traseira Esquerda
-                // Motor 4: Traseira Direita
-                int16_t m3 = throttle + pitch_total - roll_total; // Frente Esquerda
-                int16_t m1 = throttle + pitch_total + roll_total; // Frente Direita
-                int16_t m2 = throttle - pitch_total - roll_total; // Traseira Esquerda
-                int16_t m4 = throttle - pitch_total + roll_total; // Traseira Direita
+                // Correção da ordem dos motores conforme solicitado:
+                // Frente: acelera 3 e 4
+                // Trás: acelera 1 e 2
+                // Esquerda: acelera 2 e 4
+                // Direita: acelera 1 e 3
+                int16_t m1 = throttle - pitch_total - roll_total; // Frente Direita
+                int16_t m2 = throttle + pitch_total - roll_total; // Traseira Esquerda
+                int16_t m3 = throttle - pitch_total + roll_total; // Frente Esquerda
+                int16_t m4 = throttle + pitch_total + roll_total; // Traseira Direita
                 esc_set_pulse_us(1, m1);
                 esc_set_pulse_us(2, m2);
                 esc_set_pulse_us(3, m3);
