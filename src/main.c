@@ -188,10 +188,15 @@ static void vtask_rc(void *pvParameters) {
             } else if (throttle >= THROTTLE_SAFE && throttle <= 2900) {
                 int16_t pitch_total = (pitch_cmd / 4) + pitch_correction;
                 int16_t roll_total = -((roll_cmd / 4) + roll_correction);
-                int16_t m1 = throttle + pitch_total - roll_total;
-                int16_t m2 = throttle + pitch_total + roll_total;
-                int16_t m3 = throttle - pitch_total + roll_total;
-                int16_t m4 = throttle - pitch_total - roll_total;
+                // Nova ordem física dos motores:
+                // Motor 3: Frente Esquerda
+                // Motor 1: Frente Direita
+                // Motor 2: Traseira Esquerda
+                // Motor 4: Traseira Direita
+                int16_t m3 = throttle + pitch_total - roll_total; // Frente Esquerda
+                int16_t m1 = throttle + pitch_total + roll_total; // Frente Direita
+                int16_t m2 = throttle - pitch_total - roll_total; // Traseira Esquerda
+                int16_t m4 = throttle - pitch_total + roll_total; // Traseira Direita
                 esc_set_pulse_us(1, m1);
                 esc_set_pulse_us(2, m2);
                 esc_set_pulse_us(3, m3);
