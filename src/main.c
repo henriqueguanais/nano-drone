@@ -14,8 +14,8 @@
 #define PPM_SYNC_TIME 3000 // Tempo de sincronização do PPM em microssegundos
 
 #define T1DUTY_MIN 50
-#define T1DUTY_MAX 125 // 2000μs = 2ms = 10% duty cycle (125/1250 * 100)
-#define T2DUTY_MIN 16
+#define T1DUTY_MAX 129 // 2000μs = 2ms = 10% duty cycle (125/1250 * 100)
+#define T2DUTY_MIN 6
 #define T2DUTY_MAX 31 // 2000μs = 2ms = 12% duty cycle (31/256 * 100)
 
 #define THROTTLE_THRESHOLD 15 // Threshold para mudanças no throttle - evita oscilações pequenas
@@ -68,7 +68,7 @@ void setup()
 	// Configura Timer1 para Fast PWM (TOP = ICR1), 50 Hz
 	TCCR1A = (1 << COM1A1) | (1 << COM1B1) | (1 << WGM11); // Fast PWM, modo 14, habilita OC1A e OC1B
 	TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS12);	   // Prescaler 256
-	ICR1 = 1024;										   // 50 Hz (16MHz / (256 * 1250) = 50Hz)
+	ICR1 = 1249;										   // 50 Hz (16MHz / (256 * 1250) = 50Hz)
 	OCR1A = 62;											   // 1000μs (1ms) - Motor 1 (PB1) - posição de armamento ESC
 	OCR1B = 62;											   // 1000μs (1ms) - Motor 2 (PB2) - posição de armamento ESC
 	TIMSK1 = 0x00;										   // Desabilita interrupções do Timer1
@@ -77,8 +77,8 @@ void setup()
 	// Frequência = 16MHz / (prescaler × 256) = 16MHz / (1024 × 256) = ~61Hz
 	TCCR2A = (1 << COM2A1) | (1 << COM2B1) | (1 << WGM21) | (1 << WGM20); // Fast PWM mode
 	TCCR2B = (1 << CS22) | (1 << CS21) | (1 << CS20);					  // Prescaler 1024
-	OCR2A = 15;															  // Motor 3 (PB3) - ~1000μs (1ms) - posição de armamento ESC
-	OCR2B = 15;															  // Motor 4 (PD3) - ~1000μs (1ms) - posição de armamento ESC
+	OCR2A = 2;															  // Motor 3 (PB3) - ~1000μs (1ms) - posição de armamento ESC
+	OCR2B = 2;															  // Motor 4 (PD3) - ~1000μs (1ms) - posição de armamento ESC
 	TIMSK2 = 0x00;														  // Desabilita interrupções do Timer2
 
 	// Configura Timer0 para contagem de tempo (PPM timing)
@@ -402,9 +402,9 @@ uint16_t map_rc_to_pwm(uint16_t rc_value)
 
 	// Mapeia 1000-2000μs para valores OCR apropriados no Timer1 (50Hz)
 	// ICR1 = 1249, período = 20ms
-	// 1000μs → 1ms = 5% duty cycle = T1DUTY_MIN (1000/20000 * 1250 = T1DUTY_MIN)
-	// 2000μs → 2ms = 10% duty cycle = T1DUTY_MAX (2000/20000 * 1250 = T1DUTY_MAX)
-	uint16_t pwm_value = ((uint32_t)(rc_value - 1000) * T1DUTY_MIN) / 1000 + T1DUTY_MIN;
+	// 1000μs → 1ms = 5% duty cycle = T1DUTY_MIN (1000/20000 * 1250 = 62.5 ≈ 62)
+	// 2000μs → 2ms = 10% duty cycle = T1DUTY_MAX (2000/20000 * 1250 = 125)
+	uint16_t pwm_value = ((uint32_t)(rc_value - 1000) * (T1DUTY_MAX - T1DUTY_MIN)) / 1000 + T1DUTY_MIN;
 
 	// Garante limites seguros (1-2ms para ESCs)
 	if (pwm_value > T1DUTY_MAX)
@@ -430,9 +430,9 @@ uint8_t map_rc_to_pwm_8bit(uint16_t rc_value)
 
 	// Mapeia 1000-2000μs para valores OCR apropriados no Timer2 (~61Hz)
 	// Timer2 8-bit: TOP = 255, período ≈ 16.384ms
-	// 1000μs → ~6% duty cycle = T2DUTY_MIN (1000/16384 * 256 ≈ T2DUTY_MIN)
-	// 2000μs → ~12% duty cycle = T2DUTY_MAX (2000/16384 * 256 ≈ T2DUTY_MAX)
-	uint8_t pwm_value = ((uint32_t)(rc_value - 1000) * 16) / 1000 + T2DUTY_MIN;
+	// 1000μs → ~6% duty cycle = T2DUTY_MIN (1000/16384 * 256 ≈ 16)
+	// 2000μs → ~12% duty cycle = T2DUTY_MAX (2000/16384 * 256 ≈ 31)
+	uint8_t pwm_value = ((uint32_t)(rc_value - 1000) * (T2DUTY_MAX - T2DUTY_MIN)) / 1000 + T2DUTY_MIN;
 
 	// Garante limites seguros
 	if (pwm_value > T2DUTY_MAX)
