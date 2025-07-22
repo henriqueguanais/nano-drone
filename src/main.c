@@ -36,14 +36,21 @@
 #define THROTTLE_MAX_ERROR_ACCUMULATION 50  // Máximo erro acumulativo antes de reset
 #define THROTTLE_FILTER_SIZE 3              // Tamanho do filtro de média móvel
 
-// PID
-#define KP_ROLL 1.0f
-#define KI_ROLL 0.1f
-#define KD_ROLL 0.1f
-#define KP_PITCH 1.0f
-#define KI_PITCH 0.1f
-#define KD_PITCH 0.1f
-#define MAX_ANGLE_CORRECTION 200
+// Controle de sensibilidade dos joysticks - REDUZIDA
+#define STICK_DEADBAND 80                   // Zona morta dos joysticks aumentada (±80us)
+#define STICK_MAX_COMMAND 150               // Máximo comando reduzido (±150 ao invés de ±500)
+#define STICK_FILTER_SIZE 5                 // Filtro maior para suavizar mais
+#define STICK_SENSITIVITY_FACTOR 12         // Divisor aumentado para menor sensibilidade (/12)
+
+// PID - Configuração mais responsiva para correção rápida
+#define KP_ROLL 3.5f      // Aumentado para resposta mais rápida
+#define KI_ROLL 0.3f      // Aumentado para eliminar erro steady-state
+#define KD_ROLL 0.8f      // Aumentado para reduzir overshoot
+#define KP_PITCH 3.5f     // Aumentado para resposta mais rápida
+#define KI_PITCH 0.3f     // Aumentado para eliminar erro steady-state
+#define KD_PITCH 0.8f     // Aumentado para reduzir overshoot
+#define MAX_ANGLE_CORRECTION 400  // Aumentado para permitir correções maiores
+#define PID_DEADBAND 5    // Deadband mínimo para ativação do PID (0.5 graus)
 
 QueueHandle_t xQueueRC;
 volatile int16_t current_roll_angle = 0;
@@ -55,6 +62,11 @@ static int16_t roll_last_error = 0;
 static int32_t pitch_integral = 0;
 static int16_t pitch_last_error = 0;
 volatile uint8_t motors_armed = 0; // 0 = desarmado, 1 = armado
+
+// Filtros para suavizar comandos dos joysticks
+static int16_t pitch_filter[STICK_FILTER_SIZE] = {0};
+static int16_t roll_filter[STICK_FILTER_SIZE] = {0};
+static uint8_t stick_filter_index = 0;
 
 // Lookup para atan2
 const int16_t atan_lookup[51] = {
@@ -91,6 +103,31 @@ int16_t calculate_pid(int16_t setpoint, int16_t current_value, int32_t *integral
     if (output > MAX_ANGLE_CORRECTION) output = MAX_ANGLE_CORRECTION;
     if (output < -MAX_ANGLE_CORRECTION) output = -MAX_ANGLE_CORRECTION;
     return (int16_t)output;
+}
+
+// Função para processar comando do joystick com filtro e sensibilidade reduzida
+int16_t process_stick_command(int16_t raw_cmd, int16_t *filter_array) {
+    // Aplicar deadband
+    if (abs(raw_cmd) < STICK_DEADBAND) {
+        raw_cmd = 0;
+    }
+    
+    // Adicionar ao filtro circular
+    filter_array[stick_filter_index] = raw_cmd;
+    
+    // Calcular média móvel
+    int32_t sum = 0;
+    for (uint8_t i = 0; i < STICK_FILTER_SIZE; i++) {
+        sum += filter_array[i];
+    }
+    int16_t filtered_cmd = sum / STICK_FILTER_SIZE;
+    
+    // Aplicar limite máximo
+    if (filtered_cmd > STICK_MAX_COMMAND) filtered_cmd = STICK_MAX_COMMAND;
+    if (filtered_cmd < -STICK_MAX_COMMAND) filtered_cmd = -STICK_MAX_COMMAND;
+    
+    // Aplicar fator de sensibilidade (reduzir ainda mais)
+    return filtered_cmd / STICK_SENSITIVITY_FACTOR;
 }
 
 // Função para inicializar PWM usando Timer3 (OC3A) e Timer4 (OC4A, OC4B, OC4C)
@@ -161,7 +198,7 @@ static void vtask_mpu6050(void *pvParameters) {
         //     USART_send_string(" PitchCorr:"); USART_send_int(pitch_correction);
         //     USART_send_string("\r\n");
         // }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
 
@@ -178,8 +215,15 @@ static void vtask_rc(void *pvParameters) {
         xStatus = xQueueReceive(xQueueRC, &rc_local_values, portMAX_DELAY);
         if (xStatus == pdPASS) {
             uint16_t throttle_raw = rc_local_values[2];
-            int16_t pitch_cmd = rc_local_values[0] - 1500;
-            int16_t roll_cmd  = rc_local_values[1] - 1500;
+            int16_t pitch_cmd_raw = rc_local_values[0] - 1500;
+            int16_t roll_cmd_raw  = rc_local_values[1] - 1500;
+            
+            // Processar comandos dos joysticks com filtro e sensibilidade reduzida
+            int16_t pitch_cmd = process_stick_command(pitch_cmd_raw, pitch_filter);
+            int16_t roll_cmd = process_stick_command(roll_cmd_raw, roll_filter);
+            
+            // Atualizar índice do filtro circular
+            stick_filter_index = (stick_filter_index + 1) % STICK_FILTER_SIZE;
             
             // Adiciona ao filtro de média móvel
             throttle_filter[filter_index] = throttle_raw;
@@ -242,9 +286,17 @@ static void vtask_rc(void *pvParameters) {
                 for (uint8_t i = 0; i < THROTTLE_FILTER_SIZE; i++) {
                     throttle_filter[i] = ESC_MIN_PULSE;
                 }
+                
+                // Reset dos filtros dos joysticks
+                for (uint8_t i = 0; i < STICK_FILTER_SIZE; i++) {
+                    pitch_filter[i] = 0;
+                    roll_filter[i] = 0;
+                }
+                stick_filter_index = 0;
             } else if (throttle >= THROTTLE_SAFE && throttle <= 2900) {
-                int16_t pitch_total = (pitch_cmd / 4) + pitch_correction;
-                int16_t roll_total = (roll_cmd / 4) + roll_correction;
+                // Mixing suavizado - divisão maior para menor sensibilidade
+                int16_t pitch_total = (pitch_cmd / 2) + pitch_correction;  // Reduzido de /4 para /2 mas pitch_cmd já está muito menor
+                int16_t roll_total = (roll_cmd / 2) + roll_correction;     // Reduzido de /4 para /2 mas roll_cmd já está muito menor
                 // Configuração corrigida dos motores:
                 // Frente: acelera 1 e 2 (frente esquerda e frente direita)
                 // Trás: acelera 3 e 4 (traseira esquerda e traseira direita)
